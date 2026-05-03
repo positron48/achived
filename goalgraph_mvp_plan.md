@@ -931,18 +931,20 @@ spec:
 
 # 23. Production checklist
 
+Статус на 2026-05-03:
+
 ```txt
-[ ] приложение стартует локально
-[ ] миграция применяется
+[x] приложение стартует локально
+[~] миграция применяется (сейчас: prisma db push, не prisma migrate)
 [ ] seed создаёт тестовый граф
-[ ] можно создать goal
-[ ] можно соединить goals
-[ ] можно удалить edge
-[ ] можно поменять статус
+[x] можно создать goal
+[x] можно соединить goals
+[x] можно удалить edge
+[x] можно поменять статус
 [ ] available goals считаются корректно
-[ ] позиции нод сохраняются
+[x] позиции нод сохраняются
 [ ] Docker image билдится
-[ ] контейнер стартует с DATABASE_URL
+[x] контейнер стартует с DATABASE_URL
 [ ] k3s deployment healthy
 [ ] Postgres не торчит наружу
 [ ] Ingress защищён хотя бы basic auth / VPN / private network
@@ -958,6 +960,8 @@ spec:
 БД + API + React Flow + CRUD goals + CRUD edges
 ```
 
+Статус: [x] реализовано.
+
 Без этого продукта нет.
 
 ## Блок 2 — важно
@@ -966,6 +970,8 @@ spec:
 computed state + sidebar next goals + drawer edit
 ```
 
+Статус: [~] частично (drawer edit сделан, computed state и next goals пока нет).
+
 Это делает продукт полезным.
 
 ## Блок 3 — желательно
@@ -973,6 +979,8 @@ computed state + sidebar next goals + drawer edit
 ```txt
 custom node design + cycle detection + basic auth + seed
 ```
+
+Статус: [~] частично (custom node design сделан, остальное пока нет).
 
 Это делает продукт приятным и безопасным.
 
@@ -997,16 +1005,16 @@ custom node design + cycle detection + basic auth + seed
 Самый короткий путь:
 
 ```txt
-1. Prisma schema
-2. /api/graph
-3. React Flow render
-4. create goal
-5. drag save position
-6. create edge
-7. edit status
-8. computed available/locked
-9. sidebar next actions
-10. Docker + k3s
+1. [x] Prisma schema
+2. [x] /api/graph
+3. [x] React Flow render
+4. [x] create goal
+5. [x] drag save position
+6. [x] create edge
+7. [x] edit status
+8. [ ] computed available/locked
+9. [ ] sidebar next actions
+10. [~] Docker + k3s (сейчас только docker-compose для dev)
 ```
 
 ---
