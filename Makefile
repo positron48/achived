@@ -1,4 +1,4 @@
-.PHONY: up down
+.PHONY: up down seed
 
 APP_PORT ?= 3001
 MAX_PORT ?= 3999
@@ -26,3 +26,7 @@ up:
 down:
 	@docker compose down
 	@echo "GoalGraph остановлен."
+
+seed:
+	@docker compose exec app npm run prisma:seed
+	@echo "Seed применён."

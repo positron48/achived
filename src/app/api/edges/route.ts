@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { prisma } from "@/server/db";
+import { createsCycle } from "@/server/graph";
 import { hasPrismaCode } from "@/server/prisma-errors";
 import { createEdgeSchema } from "@/server/validation";
 
@@ -31,6 +32,23 @@ export async function POST(request: Request) {
       { error: "Source or target goal does not exist" },
       { status: 400 },
     );
+  }
+
+  if (type === "REQUIRES") {
+    const requiresEdges = await prisma.goalEdge.findMany({
+      where: { type: "REQUIRES" },
+      select: {
+        sourceId: true,
+        targetId: true,
+      },
+    });
+
+    if (createsCycle(sourceId, targetId, requiresEdges)) {
+      return NextResponse.json(
+        { error: "Cycle detected. Dependency cannot be created" },
+        { status: 400 },
+      );
+    }
   }
 
   try {

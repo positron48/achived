@@ -5,6 +5,7 @@ const mockPrisma = {
     count: vi.fn(),
   },
   goalEdge: {
+    findMany: vi.fn(),
     create: vi.fn(),
   },
 };
@@ -20,6 +21,7 @@ describe("POST /api/edges", () => {
 
   it("creates edge for existing goals", async () => {
     mockPrisma.goal.count.mockResolvedValueOnce(1).mockResolvedValueOnce(1);
+    mockPrisma.goalEdge.findMany.mockResolvedValueOnce([]);
     mockPrisma.goalEdge.create.mockResolvedValueOnce({
       id: "e1",
       sourceId: "a",
@@ -72,6 +74,7 @@ describe("POST /api/edges", () => {
 
   it("returns 409 for duplicate edge", async () => {
     mockPrisma.goal.count.mockResolvedValueOnce(1).mockResolvedValueOnce(1);
+    mockPrisma.goalEdge.findMany.mockResolvedValueOnce([]);
     mockPrisma.goalEdge.create.mockRejectedValueOnce({ code: "P2002" });
 
     const { POST } = await import("./route");
@@ -86,5 +89,27 @@ describe("POST /api/edges", () => {
 
     expect(response.status).toBe(409);
     expect(payload.error).toBe("Duplicate edge");
+  });
+
+  it("returns 400 when new dependency creates cycle", async () => {
+    mockPrisma.goal.count.mockResolvedValueOnce(1).mockResolvedValueOnce(1);
+    mockPrisma.goalEdge.findMany.mockResolvedValueOnce([
+      { sourceId: "b", targetId: "a" },
+      { sourceId: "c", targetId: "b" },
+    ]);
+
+    const { POST } = await import("./route");
+    const request = new Request("http://localhost/api/edges", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sourceId: "a", targetId: "c", type: "REQUIRES" }),
+    });
+
+    const response = await POST(request);
+    const payload = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(payload.error).toBe("Cycle detected. Dependency cannot be created");
+    expect(mockPrisma.goalEdge.create).not.toHaveBeenCalled();
   });
 });

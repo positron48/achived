@@ -936,7 +936,7 @@ spec:
 ```txt
 [x] приложение стартует локально
 [~] миграция применяется (сейчас: prisma db push, не prisma migrate)
-[ ] seed создаёт тестовый граф
+[x] seed создаёт тестовый граф
 [x] можно создать goal
 [x] можно соединить goals
 [x] можно удалить edge
@@ -980,7 +980,7 @@ computed state + sidebar next goals + drawer edit
 custom node design + cycle detection + basic auth + seed
 ```
 
-Статус: [~] частично (custom node design сделан, остальное пока нет).
+Статус: [x] реализовано (custom node design + cycle detection + app-level basic auth + seed).
 
 Это делает продукт приятным и безопасным.
 
