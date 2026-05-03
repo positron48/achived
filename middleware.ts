@@ -3,6 +3,10 @@ import { NextResponse, type NextRequest } from "next/server";
 import { isBasicAuthAuthorized } from "@/server/basic-auth";
 
 export function middleware(request: NextRequest) {
+  if (request.nextUrl.pathname === "/api/health") {
+    return NextResponse.next();
+  }
+
   const user = process.env.BASIC_AUTH_USER;
   const password = process.env.BASIC_AUTH_PASSWORD;
 

@@ -42,42 +42,133 @@ type GoalNodeData = {
   computedState: ComputedState;
 };
 
-const statusDotClass: Record<GoalStatus, string> = {
-  TODO: "bg-slate-400",
-  ACTIVE: "bg-cyan-400",
-  DONE: "bg-emerald-400",
-  BLOCKED: "bg-amber-400",
-  DROPPED: "bg-rose-400",
+const statusLabel: Record<GoalStatus, string> = {
+  TODO: "В планах",
+  ACTIVE: "В работе",
+  DONE: "Готово",
+  BLOCKED: "Заблокировано",
+  DROPPED: "Отменено",
+};
+
+const typeLabel: Record<GoalType, string> = {
+  EPIC: "Эпик",
+  MILESTONE: "Майлстоун",
+  TASK: "Задача",
+  HABIT: "Привычка",
+};
+
+const priorityLabel = (priority: number) => {
+  if (priority >= 4) return "Высокий";
+  if (priority >= 2) return "Средний";
+  return "Низкий";
+};
+
+const progressByComputed: Record<ComputedState, number> = {
+  DONE: 100,
+  DROPPED: 0,
+  BLOCKED: 0,
+  LOCKED: 0,
+  ACTIVE: 60,
+  AVAILABLE: 35,
+};
+
+const priorityTone = (priority: number) => {
+  if (priority >= 4) return "text-[#D47758]";
+  if (priority >= 2) return "text-[#D39A43]";
+  return "text-[#8B944C]";
+};
+
+const stateTone: Record<
+  ComputedState,
+  {
+    border: string;
+    chip: string;
+    dot: string;
+    card: string;
+  }
+> = {
+  AVAILABLE: {
+    border: "border-[#8B944C]/65",
+    chip: "text-[#A1AA7B] bg-[#8B944C]/15 border-[#8B944C]/45",
+    dot: "bg-[#8B944C]",
+    card: "bg-[#1E211F]",
+  },
+  ACTIVE: {
+    border: "border-[#B96745]/75",
+    chip: "text-[#D8C8A8] bg-[#B96745]/15 border-[#B96745]/55",
+    dot: "bg-[#D39A43]",
+    card: "bg-[#211E1A]",
+  },
+  LOCKED: {
+    border: "border-white/10",
+    chip: "text-[#8A857B] bg-white/[0.03] border-white/10",
+    dot: "bg-[#777268]",
+    card: "bg-[#191B1A]",
+  },
+  BLOCKED: {
+    border: "border-[#8A536B]/55",
+    chip: "text-[#BA9CAA] bg-[#8A536B]/15 border-[#8A536B]/40",
+    dot: "bg-[#8A536B]",
+    card: "bg-[#1A191C]",
+  },
+  DONE: {
+    border: "border-[#A1AA7B]/55",
+    chip: "text-[#C7D39B] bg-[#A1AA7B]/15 border-[#A1AA7B]/35",
+    dot: "bg-[#A1AA7B]",
+    card: "bg-[#1B1E1A]",
+  },
+  DROPPED: {
+    border: "border-[#A94F3D]/50",
+    chip: "text-[#CD9B90] bg-[#A94F3D]/15 border-[#A94F3D]/40",
+    dot: "bg-[#A94F3D]",
+    card: "bg-[#1B1918]",
+  },
+};
+
+const stateTitle: Record<ComputedState, string> = {
+  AVAILABLE: "Доступно",
+  ACTIVE: "В фокусе",
+  LOCKED: "Ждет зависимости",
+  BLOCKED: "Заблокировано",
+  DONE: "Завершено",
+  DROPPED: "Отменено",
 };
 
 function GoalNode({ data, selected }: NodeProps<Node<GoalNodeData>>) {
-  const borderByComputed: Record<ComputedState, string> = {
-    AVAILABLE: "border-emerald-400",
-    ACTIVE: "border-cyan-400",
-    LOCKED: "border-slate-700",
-    BLOCKED: "border-amber-400",
-    DONE: "border-emerald-700",
-    DROPPED: "border-rose-700",
-  };
+  const tone = stateTone[data.computedState];
+  const progress = progressByComputed[data.computedState];
+  const ring = `conic-gradient(#8B944C ${progress * 3.6}deg, rgba(255,255,255,.1) 0deg)`;
 
   return (
     <div
-      className={`relative min-h-20 min-w-56 rounded-xl border px-4 py-3 shadow-lg ${
-        selected ? "ring-2 ring-cyan-300" : ""
-      } bg-slate-950 text-slate-100`}
+      className={`relative min-h-24 min-w-64 rounded-2xl border px-4 py-3 shadow-[0_12px_28px_rgba(0,0,0,.25)] transition ${
+        tone.border
+      } ${tone.card} ${selected ? "ring-1 ring-[#D39A43] shadow-[0_0_0_1px_rgba(211,154,67,.7),0_0_28px_rgba(211,154,67,.16)]" : ""}`}
     >
-      <div className={`absolute inset-0 rounded-xl border ${borderByComputed[data.computedState]}`} />
-      <Handle type="target" position={Position.Left} className="!h-3 !w-3 !bg-cyan-500" />
+      <Handle type="target" position={Position.Left} className="!h-2.5 !w-2.5 !border-none !bg-[#B8B0A3]" />
 
-      <span
-        className={`absolute right-2 top-2 h-2.5 w-2.5 rounded-full ${statusDotClass[data.status]}`}
-        title={data.status}
-      />
-      <div className="relative z-10 flex h-full min-h-14 items-center justify-center text-center text-sm font-semibold leading-tight">
-        {data.title || "Untitled goal"}
+      <div className="relative z-10 flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate text-[15px] font-semibold text-[#F2EEE6]">{data.title || "Untitled goal"}</p>
+          <p className="mt-1 text-[11px] text-[#B8B0A3]">{typeLabel[data.type]}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className={`h-2.5 w-2.5 rounded-full ${tone.dot}`} />
+          <div
+            className="grid h-9 w-9 place-items-center rounded-full border border-white/10 text-[10px] font-semibold text-[#D8C8A8]"
+            style={{ backgroundImage: ring }}
+          >
+            <span className="grid h-7 w-7 place-items-center rounded-full bg-[#161817]">{progress}%</span>
+          </div>
+        </div>
       </div>
 
-      <Handle type="source" position={Position.Right} className="!h-3 !w-3 !bg-cyan-500" />
+      <div className="relative z-10 mt-3 flex items-center justify-between">
+        <span className={`rounded-full border px-2 py-0.5 text-[10px] ${tone.chip}`}>{stateTitle[data.computedState]}</span>
+        <span className={`text-[11px] ${priorityTone(data.priority)}`}>⚑ {priorityLabel(data.priority)}</span>
+      </div>
+
+      <Handle type="source" position={Position.Right} className="!h-2.5 !w-2.5 !border-none !bg-[#B8B0A3]" />
     </div>
   );
 }
@@ -191,6 +282,7 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedGoalId, setSelectedGoalId] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
 
   const selectedGoalNode = useMemo(
     () => nodes.find((node) => node.id === selectedGoalId) ?? null,
@@ -205,12 +297,29 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
     () => nextGoals.filter((goal) => goal.computedState === "AVAILABLE"),
     [nextGoals],
   );
+  const query = searchQuery.trim().toLowerCase();
+  const matchesSearch = useCallback(
+    (title: string) => (query.length === 0 ? true : title.toLowerCase().includes(query)),
+    [query],
+  );
+  const activeGoalsFiltered = useMemo(
+    () => activeGoals.filter((goal) => matchesSearch(goal.title)),
+    [activeGoals, matchesSearch],
+  );
+  const availableGoalsFiltered = useMemo(
+    () => availableGoals.filter((goal) => matchesSearch(goal.title)),
+    [availableGoals, matchesSearch],
+  );
   const blockedGoals = useMemo(
     () =>
       nodes
         .filter((node) => node.data.computedState === "LOCKED" || node.data.computedState === "BLOCKED")
         .map((node) => node.data.title),
     [nodes],
+  );
+  const blockedGoalsFiltered = useMemo(
+    () => blockedGoals.filter((title) => matchesSearch(title)),
+    [blockedGoals, matchesSearch],
   );
   const recentDone = useMemo(
     () =>
@@ -221,6 +330,28 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
         .map((node) => node.data.title),
     [nodes],
   );
+  const recentDoneFiltered = useMemo(
+    () => recentDone.filter((title) => matchesSearch(title)),
+    [matchesSearch, recentDone],
+  );
+  const visibleNodes = useMemo(
+    () =>
+      query.length === 0
+        ? nodes
+        : nodes.map((node) => ({
+            ...node,
+            hidden: !matchesSearch(node.data.title),
+          })),
+    [matchesSearch, nodes, query.length],
+  );
+  const suggestedGoal = useMemo(
+    () => availableGoalsFiltered[0] ?? activeGoalsFiltered[0] ?? null,
+    [activeGoalsFiltered, availableGoalsFiltered],
+  );
+  const focusCount = activeGoals.length;
+  const startableCount = availableGoals.length;
+  const blockedCount = blockedGoals.length;
+  const doneCount = nodes.filter((node) => node.data.computedState === "DONE").length;
 
   const getNextGoalPosition = useCallback(() => {
     const index = nodes.length;
@@ -452,20 +583,23 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
   const setNodeField = useCallback(
     (goalId: string, patch: Partial<GoalNodeData>) => {
       setNodes((prev) =>
-        prev.map((node) =>
-          node.id === goalId
-            ? {
-                ...node,
-                data: {
-                  ...node.data,
-                  ...patch,
-                },
-              }
-            : node,
+        applyComputedStates(
+          prev.map((node) =>
+            node.id === goalId
+              ? {
+                  ...node,
+                  data: {
+                    ...node.data,
+                    ...patch,
+                  },
+                }
+              : node,
+          ),
+          edges,
         ),
       );
     },
-    [],
+    [edges],
   );
 
   const quickSetStatus = useCallback(
@@ -477,303 +611,416 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
   );
 
   return (
-    <div className="flex h-full w-full">
-      <aside className="w-80 border-r border-slate-800 bg-slate-950 p-4">
-        <div className="mb-4 flex items-center justify-between">
-          <h1 className="text-lg font-semibold">GoalGraph MVP</h1>
-          <button
-            type="button"
-            className="rounded bg-cyan-600 px-3 py-1 text-sm font-medium hover:bg-cyan-500"
-            onClick={createGoal}
-          >
-            Add Goal
+    <div className="flex h-full w-full flex-col bg-[#101211] text-[#F2EEE6]">
+      <header className="flex h-20 items-center gap-5 border-b border-white/10 bg-[#111312] px-6">
+        <div className="flex items-center gap-3">
+          <div className="grid h-9 w-9 place-items-center rounded-lg border border-white/15 bg-[#1C1F1D] text-[#D8C8A8]">
+            ◈
+          </div>
+          <p className="text-2xl font-medium tracking-tight">GoalGraph</p>
+        </div>
+
+        <div className="min-w-0 flex-1">
+          <div className="flex h-11 items-center gap-3 rounded-xl border border-white/10 bg-[#181B1A] px-3">
+            <span className="text-[#777268]">⌕</span>
+            <input
+              className="h-full w-full bg-transparent text-sm text-[#F2EEE6] outline-none placeholder:text-[#777268]"
+              placeholder="Поиск целей, тегов, заметок..."
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+            />
+            <span className="rounded border border-white/10 px-1.5 py-0.5 text-[10px] text-[#B8B0A3]">⌘K</span>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-[#181B1A] p-1 text-sm text-[#B8B0A3]">
+          <button type="button" className="rounded-lg bg-white/10 px-3 py-1.5 text-[#F2EEE6]">
+            Graph
+          </button>
+          <button type="button" className="rounded-lg px-3 py-1.5 hover:bg-white/5">
+            List
+          </button>
+          <button type="button" className="rounded-lg px-3 py-1.5 hover:bg-white/5">
+            Timeline
           </button>
         </div>
 
-        <div className="mb-6 flex gap-2">
-          <button
-            type="button"
-            className="rounded border border-slate-700 px-3 py-1 text-sm hover:bg-slate-800"
-            onClick={loadGraph}
-          >
-            Refresh
-          </button>
-          <button
-            type="button"
-            className="rounded border border-slate-700 px-3 py-1 text-sm hover:bg-slate-800"
-            onClick={() => {
-              void loadNext();
-            }}
-          >
-            Next
-          </button>
-          {isLoading ? <span className="text-xs text-slate-400">Loading...</span> : null}
-        </div>
-
-        {error ? <p className="mb-4 rounded bg-rose-950 p-2 text-sm text-rose-300">{error}</p> : null}
-
-        <div className="space-y-5">
-          <div>
-            <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Active</h2>
-            <div className="space-y-2">
-              {activeGoals.length === 0 ? (
-                <p className="text-sm text-slate-500">Нет активных</p>
-              ) : (
-                activeGoals.map((goal) => (
-                  <div
-                    key={goal.id}
-                    className="w-full cursor-pointer rounded border border-slate-800 bg-slate-900 px-2 py-2 text-left hover:bg-slate-800"
-                    onClick={() => setSelectedGoalId(goal.id)}
-                  >
-                    <div className="text-sm font-medium">{goal.title}</div>
-                    <div className="mt-1 flex items-center justify-between text-xs text-slate-400">
-                      <span>{goal.type}</span>
-                      <span>P{goal.priority}</span>
-                    </div>
-                    <button
-                      type="button"
-                      className="mt-2 rounded bg-emerald-700 px-2 py-0.5 text-xs hover:bg-emerald-600"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        void quickSetStatus(goal.id, "DONE");
-                      }}
-                    >
-                      Done
-                    </button>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-
-          <div>
-            <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
-              Available next
-            </h2>
-            <div className="space-y-2">
-              {availableGoals.length === 0 ? (
-                <p className="text-sm text-slate-500">Нет доступных</p>
-              ) : (
-                availableGoals.map((goal) => (
-                  <div
-                    key={goal.id}
-                    className="w-full cursor-pointer rounded border border-slate-800 bg-slate-900 px-2 py-2 text-left hover:bg-slate-800"
-                    onClick={() => setSelectedGoalId(goal.id)}
-                  >
-                    <div className="text-sm font-medium">{goal.title}</div>
-                    <div className="mt-1 flex items-center justify-between text-xs text-slate-400">
-                      <span>{goal.type}</span>
-                      <span>P{goal.priority}</span>
-                    </div>
-                    <button
-                      type="button"
-                      className="mt-2 rounded bg-cyan-700 px-2 py-0.5 text-xs hover:bg-cyan-600"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        void quickSetStatus(goal.id, "ACTIVE");
-                      }}
-                    >
-                      Start
-                    </button>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-
-          <div>
-            <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Blocked</h2>
-            <div className="space-y-1 text-sm text-slate-400">
-              {blockedGoals.length === 0 ? (
-                <p className="text-slate-500">Нет</p>
-              ) : (
-                blockedGoals.map((title) => <p key={title}>- {title}</p>)
-              )}
-            </div>
-          </div>
-
-          <div>
-            <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
-              Recently done
-            </h2>
-            <div className="space-y-1 text-sm text-slate-400">
-              {recentDone.length === 0 ? (
-                <p className="text-slate-500">Пока пусто</p>
-              ) : (
-                recentDone.map((title) => <p key={title}>- {title}</p>)
-              )}
-            </div>
-          </div>
-        </div>
-      </aside>
-
-      <section className="h-full flex-1 bg-slate-900">
-        <ReactFlow
-          nodeTypes={nodeTypes}
-          nodes={nodes}
-          edges={edges}
-          onNodesChange={onNodesChange}
-          onEdgesChange={onEdgesChange}
-          onNodeClick={onNodeClick}
-          onNodeDragStop={onNodeDragStop}
-          onConnect={onConnect}
-          onEdgeDoubleClick={onEdgeDoubleClick}
-          fitView
+        <button
+          type="button"
+          className="h-10 rounded-xl bg-[#B96745] px-4 text-sm font-medium text-[#F2EEE6] transition hover:bg-[#C47657]"
+          onClick={createGoal}
         >
-          <Background />
-          <MiniMap />
-          <Controls />
-        </ReactFlow>
-      </section>
+          + Новая цель
+        </button>
 
-      <aside className="w-96 border-l border-slate-800 bg-slate-950 p-4">
-        {selectedGoalNode ? (
-          <div className="space-y-3">
-            <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-300">
-              Goal Drawer
-            </h2>
+        <div className="flex items-center gap-4 text-xs text-[#B8B0A3]">
+          <div className="text-right">
+            <p className="text-[#F2EEE6]">{focusCount}</p>
+            <p>в фокусе</p>
+          </div>
+          <div className="text-right">
+            <p className="text-[#F2EEE6]">{startableCount}</p>
+            <p>можно начать</p>
+          </div>
+          <div className="text-right">
+            <p className="text-[#F2EEE6]">{doneCount}</p>
+            <p>done</p>
+          </div>
+        </div>
+      </header>
 
-            <label className="block text-xs text-slate-300">
-              Title
-              <input
-                className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm"
-                value={selectedTitle}
-                onChange={(event) => setNodeField(selectedGoalNode.id, { title: event.target.value })}
-              />
-            </label>
-
-            <label className="block text-xs text-slate-300">
-              Description
-              <textarea
-                className="mt-1 h-24 w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm"
-                value={selectedDescription}
-                onChange={(event) =>
-                  setNodeField(selectedGoalNode.id, { description: event.target.value })
-                }
-              />
-            </label>
-
-            <div className="grid grid-cols-2 gap-2">
-              <label className="block text-xs text-slate-300">
-                Type
-                <select
-                  className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm"
-                  value={selectedType}
-                  onChange={(event) =>
-                    setNodeField(selectedGoalNode.id, { type: event.target.value as GoalType })
-                  }
-                >
-                  {typeOptions.map((type) => (
-                    <option key={type} value={type}>
-                      {type}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label className="block text-xs text-slate-300">
-                Status
-                <select
-                  className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm"
-                  value={selectedStatus}
-                  onChange={(event) =>
-                    setNodeField(selectedGoalNode.id, { status: event.target.value as GoalStatus })
-                  }
-                >
-                  {statusOptions.map((status) => (
-                    <option key={status} value={status}>
-                      {status}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-
-            <label className="block text-xs text-slate-300">
-              Priority
-              <input
-                type="number"
-                min={1}
-                max={5}
-                className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm"
-                value={selectedPriority}
-                onChange={(event) =>
-                  setNodeField(selectedGoalNode.id, {
-                    priority: Math.min(5, Math.max(1, Number(event.target.value || 3))),
-                  })
-                }
-              />
-            </label>
-
-            <div className="flex gap-2">
-              <button
-                type="button"
-                className="rounded bg-cyan-700 px-3 py-1.5 text-sm hover:bg-cyan-600"
-                onClick={() =>
-                  void updateGoal(selectedGoalNode.id, {
-                    title: selectedTitle,
-                    description: selectedDescription,
-                    type: selectedType,
-                    status: selectedStatus,
-                    priority: selectedPriority,
-                  })
-                }
-              >
-                Save
-              </button>
-              <button
-                type="button"
-                className="rounded bg-emerald-700 px-3 py-1.5 text-sm hover:bg-emerald-600"
-                onClick={() => void quickSetStatus(selectedGoalNode.id, "DONE")}
-              >
-                Mark done
-              </button>
-              <button
-                type="button"
-                className="rounded bg-sky-700 px-3 py-1.5 text-sm hover:bg-sky-600"
-                onClick={() => void quickSetStatus(selectedGoalNode.id, "ACTIVE")}
-              >
-                Mark active
-              </button>
-              <button
-                type="button"
-                className="rounded bg-rose-700 px-3 py-1.5 text-sm hover:bg-rose-600"
-                onClick={() => void quickSetStatus(selectedGoalNode.id, "DROPPED")}
-              >
-                Drop
-              </button>
-            </div>
-
+      <div className="flex min-h-0 flex-1">
+        <aside className="w-[300px] overflow-y-auto border-r border-white/10 bg-[#171918] p-4">
+          <div className="mb-5 flex items-center justify-between">
+            <h2 className="text-xs font-semibold uppercase tracking-[0.08em] text-[#B8B0A3]">Фокус</h2>
             <button
               type="button"
-              className="w-full rounded bg-rose-900 px-3 py-2 text-sm font-medium hover:bg-rose-800"
-              onClick={deleteGoal}
+              className="rounded-lg border border-white/10 px-2 py-1 text-[11px] text-[#B8B0A3] hover:bg-white/5"
+              onClick={loadGraph}
             >
-              Delete Goal
+              Обновить
             </button>
-
-            <div className="rounded border border-slate-800 bg-slate-900 p-3 text-sm text-slate-300">
-              <p className="mb-1 font-semibold">Blocked by:</p>
-              {selectedBlockedBy.length === 0 ? (
-                <p className="text-slate-500">- none</p>
-              ) : (
-                selectedBlockedBy.map((title) => <p key={title}>- {title}</p>)
-              )}
-
-              <p className="mb-1 mt-3 font-semibold">Unlocks:</p>
-              {selectedUnlocks.length === 0 ? (
-                <p className="text-slate-500">- none</p>
-              ) : (
-                selectedUnlocks.map((title) => <p key={title}>- {title}</p>)
-              )}
-            </div>
           </div>
-        ) : (
-          <p className="text-sm text-slate-400">
-            Выберите ноду, чтобы открыть drawer. Double click по edge удаляет связь.
-          </p>
-        )}
-      </aside>
+
+          <div className="space-y-5">
+            <section>
+              <div className="mb-2 flex items-center justify-between">
+                <h3 className="text-xs font-semibold uppercase tracking-[0.06em] text-[#8A857B]">В фокусе</h3>
+                <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-[#B8B0A3]">
+                  {activeGoalsFiltered.length}
+                </span>
+              </div>
+              <div className="space-y-2">
+                {activeGoalsFiltered.length === 0 ? (
+                  <p className="text-sm text-[#777268]">Пока пусто</p>
+                ) : (
+                  activeGoalsFiltered.map((goal) => (
+                    <button
+                      key={goal.id}
+                      type="button"
+                      className="w-full rounded-xl border border-[#B96745]/35 bg-[#201D1A] px-3 py-2 text-left transition hover:border-[#B96745]/55"
+                      onClick={() => setSelectedGoalId(goal.id)}
+                    >
+                      <p className="truncate text-sm font-medium text-[#F2EEE6]">{goal.title}</p>
+                      <p className="mt-1 text-[11px] text-[#B8B0A3]">{typeLabel[goal.type]}</p>
+                    </button>
+                  ))
+                )}
+              </div>
+            </section>
+
+            <section>
+              <div className="mb-2 flex items-center justify-between">
+                <h3 className="text-xs font-semibold uppercase tracking-[0.06em] text-[#8A857B]">Можно начать</h3>
+                <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-[#B8B0A3]">
+                  {availableGoalsFiltered.length}
+                </span>
+              </div>
+              <div className="space-y-2">
+                {availableGoalsFiltered.length === 0 ? (
+                  <p className="text-sm text-[#777268]">Нет доступных</p>
+                ) : (
+                  availableGoalsFiltered.map((goal) => (
+                    <button
+                      key={goal.id}
+                      type="button"
+                      className="w-full rounded-xl border border-[#8B944C]/35 bg-[#1D211D] px-3 py-2 text-left transition hover:border-[#8B944C]/55"
+                      onClick={() => setSelectedGoalId(goal.id)}
+                    >
+                      <p className="truncate text-sm font-medium text-[#F2EEE6]">{goal.title}</p>
+                      <div className="mt-1 flex items-center justify-between text-[11px] text-[#B8B0A3]">
+                        <span>{typeLabel[goal.type]}</span>
+                        <span className={priorityTone(goal.priority)}>⚑ {priorityLabel(goal.priority)}</span>
+                      </div>
+                      <span className="mt-2 inline-flex rounded-full bg-[#8B944C]/20 px-2 py-0.5 text-[10px] text-[#C7D39B]">
+                        Доступно
+                      </span>
+                    </button>
+                  ))
+                )}
+              </div>
+            </section>
+
+            <section>
+              <div className="mb-2 flex items-center justify-between">
+                <h3 className="text-xs font-semibold uppercase tracking-[0.06em] text-[#8A857B]">Заблокировано</h3>
+                <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-[#B8B0A3]">
+                  {blockedCount}
+                </span>
+              </div>
+              <div className="space-y-1 text-sm text-[#8A857B]">
+                {blockedGoalsFiltered.length === 0 ? (
+                  <p className="text-[#777268]">Нет</p>
+                ) : (
+                  blockedGoalsFiltered.map((title) => <p key={title}>• {title}</p>)
+                )}
+              </div>
+            </section>
+
+            <section>
+              <h3 className="mb-2 text-xs font-semibold uppercase tracking-[0.06em] text-[#8A857B]">
+                Недавно завершено
+              </h3>
+              <div className="space-y-1 text-sm text-[#8A857B]">
+                {recentDoneFiltered.length === 0 ? (
+                  <p className="text-[#777268]">Пока пусто</p>
+                ) : (
+                  recentDoneFiltered.map((title) => <p key={title}>✓ {title}</p>)
+                )}
+              </div>
+            </section>
+          </div>
+        </aside>
+
+        <section className="goal-graph-flow relative h-full min-w-0 flex-1">
+          {suggestedGoal ? (
+            <button
+              type="button"
+              className="absolute left-1/2 top-4 z-10 -translate-x-1/2 rounded-xl border border-[#D39A43]/45 bg-[#1E211F]/95 px-4 py-2 text-left shadow-[0_12px_26px_rgba(0,0,0,.24)] hover:border-[#D39A43]/65"
+              onClick={() => setSelectedGoalId(suggestedGoal.id)}
+            >
+              <p className="text-[11px] uppercase tracking-[0.06em] text-[#B8B0A3]">Suggested next step</p>
+              <p className="mt-1 text-sm font-medium text-[#F2EEE6]">{suggestedGoal.title}</p>
+            </button>
+          ) : null}
+
+          {error ? (
+            <div className="absolute left-4 top-4 z-10 rounded-xl border border-[#A94F3D]/40 bg-[#2A1A18] px-3 py-2 text-sm text-[#F3B1A4]">
+              {error}
+            </div>
+          ) : null}
+
+          <ReactFlow
+            className="h-full"
+            nodeTypes={nodeTypes}
+            nodes={visibleNodes}
+            edges={edges}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            onNodeClick={onNodeClick}
+            onNodeDragStop={onNodeDragStop}
+            onConnect={onConnect}
+            onEdgeDoubleClick={onEdgeDoubleClick}
+            defaultEdgeOptions={{
+              style: { stroke: "rgba(216,200,168,.35)", strokeWidth: 1.2 },
+            }}
+            fitView
+          >
+            <Background gap={24} size={1} />
+            <MiniMap
+              pannable
+              zoomable
+              position="bottom-right"
+              style={{
+                width: 210,
+                height: 130,
+                borderRadius: 12,
+                backgroundColor: "rgba(29,32,30,.85)",
+                border: "1px solid rgba(255,255,255,.08)",
+              }}
+              nodeColor={(node) => {
+                const n = node as Node<GoalNodeData>;
+                if (n.data.computedState === "DONE") return "#8B944C";
+                if (n.data.computedState === "ACTIVE") return "#B96745";
+                if (n.id === selectedGoalId) return "#D39A43";
+                if (n.data.computedState === "BLOCKED" || n.data.computedState === "LOCKED") return "#5F4A56";
+                return "#6E6A60";
+              }}
+            />
+            <Controls position="bottom-left" />
+          </ReactFlow>
+
+          <div className="absolute bottom-4 left-4 z-10 flex gap-2">
+            <button
+              type="button"
+              className="rounded-lg border border-white/10 bg-[#1D201E]/90 px-3 py-1.5 text-xs text-[#B8B0A3] hover:bg-[#252926]"
+              onClick={() => {
+                void loadNext();
+              }}
+            >
+              Обновить рекомендации
+            </button>
+            {isLoading ? <span className="text-xs text-[#8A857B]">Загрузка...</span> : null}
+          </div>
+        </section>
+
+        <aside className="w-[340px] overflow-y-auto border-l border-white/10 bg-[#171918] px-4 py-5">
+          {selectedGoalNode ? (
+            <div className="space-y-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-2xl font-semibold text-[#F2EEE6]">{selectedTitle}</h2>
+                  <p className="mt-1 text-xs text-[#B8B0A3]">{typeLabel[selectedType]}</p>
+                </div>
+                <button
+                  type="button"
+                  className="rounded-lg border border-white/10 px-2 py-1 text-xs text-[#B8B0A3] hover:bg-white/5"
+                  onClick={() => setSelectedGoalId(null)}
+                >
+                  Закрыть
+                </button>
+              </div>
+
+              <div className="flex items-center justify-between rounded-xl border border-white/10 bg-[#1D201E] px-3 py-2">
+                <span className="text-xs text-[#B8B0A3]">Статус</span>
+                <span className="rounded-full border border-[#D39A43]/45 bg-[#D39A43]/12 px-2 py-0.5 text-xs text-[#D8C8A8]">
+                  {statusLabel[selectedStatus]}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div className="rounded-xl border border-white/10 bg-[#1D201E] px-3 py-2">
+                  <p className="text-[11px] text-[#8A857B]">Приоритет</p>
+                  <p className={`mt-1 text-sm ${priorityTone(selectedPriority)}`}>⚑ {priorityLabel(selectedPriority)}</p>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-[#1D201E] px-3 py-2">
+                  <p className="text-[11px] text-[#8A857B]">Прогресс</p>
+                  <p className="mt-1 text-sm text-[#A1AA7B]">{progressByComputed[selectedGoalNode.data.computedState]}%</p>
+                </div>
+              </div>
+
+              <label className="block text-xs text-[#B8B0A3]">
+                Название
+                <input
+                  className="mt-1 h-10 w-full rounded-xl border border-white/10 bg-[#181B1A] px-3 text-sm text-[#F2EEE6] outline-none focus:border-[#D39A43]/45"
+                  value={selectedTitle}
+                  onChange={(event) => setNodeField(selectedGoalNode.id, { title: event.target.value })}
+                />
+              </label>
+
+              <label className="block text-xs text-[#B8B0A3]">
+                Описание
+                <textarea
+                  className="mt-1 h-24 w-full rounded-xl border border-white/10 bg-[#181B1A] px-3 py-2 text-sm text-[#F2EEE6] outline-none focus:border-[#D39A43]/45"
+                  value={selectedDescription}
+                  onChange={(event) =>
+                    setNodeField(selectedGoalNode.id, { description: event.target.value })
+                  }
+                />
+              </label>
+
+              <div className="grid grid-cols-2 gap-2">
+                <label className="block text-xs text-[#B8B0A3]">
+                  Тип
+                  <select
+                    className="mt-1 h-10 w-full rounded-xl border border-white/10 bg-[#181B1A] px-2 text-sm text-[#F2EEE6] outline-none focus:border-[#D39A43]/45"
+                    value={selectedType}
+                    onChange={(event) =>
+                      setNodeField(selectedGoalNode.id, { type: event.target.value as GoalType })
+                    }
+                  >
+                    {typeOptions.map((type) => (
+                      <option key={type} value={type}>
+                        {typeLabel[type]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="block text-xs text-[#B8B0A3]">
+                  Статус
+                  <select
+                    className="mt-1 h-10 w-full rounded-xl border border-white/10 bg-[#181B1A] px-2 text-sm text-[#F2EEE6] outline-none focus:border-[#D39A43]/45"
+                    value={selectedStatus}
+                    onChange={(event) =>
+                      setNodeField(selectedGoalNode.id, { status: event.target.value as GoalStatus })
+                    }
+                  >
+                    {statusOptions.map((status) => (
+                      <option key={status} value={status}>
+                        {statusLabel[status]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              <label className="block text-xs text-[#B8B0A3]">
+                Приоритет (1..5)
+                <input
+                  type="number"
+                  min={1}
+                  max={5}
+                  className="mt-1 h-10 w-full rounded-xl border border-white/10 bg-[#181B1A] px-3 text-sm text-[#F2EEE6] outline-none focus:border-[#D39A43]/45"
+                  value={selectedPriority}
+                  onChange={(event) =>
+                    setNodeField(selectedGoalNode.id, {
+                      priority: Math.min(5, Math.max(1, Number(event.target.value || 3))),
+                    })
+                  }
+                />
+              </label>
+
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  className="h-10 rounded-xl bg-[#B96745] text-sm font-medium text-[#F2EEE6] hover:bg-[#C47657]"
+                  onClick={() =>
+                    void updateGoal(selectedGoalNode.id, {
+                      title: selectedTitle,
+                      description: selectedDescription,
+                      type: selectedType,
+                      status: selectedStatus,
+                      priority: selectedPriority,
+                    })
+                  }
+                >
+                  Сохранить
+                </button>
+                <button
+                  type="button"
+                  className="h-10 rounded-xl bg-[#8B944C]/35 text-sm text-[#DCE6AA] hover:bg-[#8B944C]/45"
+                  onClick={() => void quickSetStatus(selectedGoalNode.id, "DONE")}
+                >
+                  Отметить done
+                </button>
+                <button
+                  type="button"
+                  className="h-10 rounded-xl bg-[#D39A43]/30 text-sm text-[#E6CA96] hover:bg-[#D39A43]/40"
+                  onClick={() => void quickSetStatus(selectedGoalNode.id, "ACTIVE")}
+                >
+                  В работу
+                </button>
+                <button
+                  type="button"
+                  className="h-10 rounded-xl bg-[#A94F3D]/30 text-sm text-[#F0B0A0] hover:bg-[#A94F3D]/40"
+                  onClick={() => void quickSetStatus(selectedGoalNode.id, "DROPPED")}
+                >
+                  Отменить
+                </button>
+              </div>
+
+              <button
+                type="button"
+                className="h-10 w-full rounded-xl border border-[#A94F3D]/50 bg-[#2A1A18] text-sm text-[#F0B0A0] hover:bg-[#351F1B]"
+                onClick={deleteGoal}
+              >
+                Удалить цель
+              </button>
+
+              <div className="rounded-xl border border-white/10 bg-[#1D201E] p-3 text-sm text-[#B8B0A3]">
+                <p className="mb-1 text-xs uppercase tracking-[0.06em] text-[#8A857B]">Заблокировано из-за</p>
+                {selectedBlockedBy.length === 0 ? (
+                  <p className="text-[#777268]">Ничего</p>
+                ) : (
+                  selectedBlockedBy.map((title) => <p key={title}>• {title}</p>)
+                )}
+
+                <p className="mb-1 mt-4 text-xs uppercase tracking-[0.06em] text-[#8A857B]">Разблокирует</p>
+                {selectedUnlocks.length === 0 ? (
+                  <p className="text-[#777268]">Ничего</p>
+                ) : (
+                  selectedUnlocks.map((title) => <p key={title}>• {title}</p>)
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-xl border border-white/10 bg-[#1D201E] p-4 text-sm text-[#B8B0A3]">
+              Выберите цель на графе, чтобы открыть детали. Двойной клик по связи удаляет зависимость.
+            </div>
+          )}
+        </aside>
+      </div>
     </div>
   );
 }

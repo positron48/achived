@@ -1,5 +1,31 @@
 @import "tailwindcss";
 
+:root {
+  --bg-main: #101211;
+  --bg-canvas: #121514;
+  --bg-panel: #171918;
+  --bg-panel-elevated: #1d201e;
+  --bg-card: #20231f;
+  --bg-card-muted: #191b1a;
+  --bg-input: #181b1a;
+  --border-soft: rgba(255, 255, 255, 0.07);
+  --border-medium: rgba(255, 255, 255, 0.11);
+  --border-strong: rgba(255, 255, 255, 0.18);
+  --text-primary: #f2eee6;
+  --text-secondary: #b8b0a3;
+  --text-muted: #777268;
+  --text-disabled: #56534d;
+  --accent-amber: #d39a43;
+  --accent-copper: #b96745;
+  --accent-olive: #8b944c;
+  --accent-sage: #a1aa7b;
+  --accent-plum: #8a536b;
+  --accent-rust: #a94f3d;
+  --accent-sand: #d8c8a8;
+  --shadow-soft: 0 8px 24px rgba(0, 0, 0, 0.24);
+  --shadow-card: 0 12px 36px rgba(0, 0, 0, 0.28);
+}
+
 html,
 body {
   margin: 0;
@@ -8,11 +34,52 @@ body {
 }
 
 body {
-  background: #020617;
-  color: #e2e8f0;
+  background: var(--bg-main);
+  color: var(--text-primary);
   font-family: Inter, Arial, Helvetica, sans-serif;
 }
 
 * {
   box-sizing: border-box;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+  background: rgba(216, 200, 168, 0.23);
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.goal-graph-flow {
+  background: radial-gradient(circle at 20% 10%, rgba(211, 154, 67, 0.08), transparent 40%), var(--bg-canvas);
+}
+
+.goal-graph-flow .react-flow__background path {
+  stroke: rgba(216, 200, 168, 0.08);
+}
+
+.goal-graph-flow .react-flow__controls {
+  border: 1px solid var(--border-soft);
+  background: rgba(29, 32, 30, 0.9);
+  box-shadow: var(--shadow-soft);
+}
+
+.goal-graph-flow .react-flow__controls-button {
+  border-color: var(--border-soft);
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.goal-graph-flow .react-flow__controls-button:hover {
+  background: rgba(216, 200, 168, 0.08);
+  color: var(--text-primary);
 }
