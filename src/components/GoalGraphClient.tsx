@@ -5,14 +5,19 @@ import {
   applyEdgeChanges,
   applyNodeChanges,
   Background,
+  type ConnectionLineComponentProps,
+  ConnectionLineType,
   type Connection,
   Controls,
+  type EdgeProps,
+  getStraightPath,
   Handle,
   MiniMap,
   type NodeProps,
   Position,
   ReactFlow,
   ReactFlowProvider,
+  useInternalNode,
   type Edge,
   type EdgeChange,
   type Node,
@@ -42,6 +47,13 @@ type GoalNodeData = {
   computedState: ComputedState;
 };
 
+const DEFAULT_NODE_WIDTH = 256;
+const DEFAULT_NODE_HEIGHT = 96;
+const EDGE_STROKE = "rgba(216,200,168,.42)";
+const EDGE_WIDTH = 1.2;
+const EDGE_ARROW_LENGTH = 12;
+const EDGE_ARROW_HALF_WIDTH = 4;
+
 const statusLabel: Record<GoalStatus, string> = {
   TODO: "В планах",
   ACTIVE: "В работе",
@@ -61,15 +73,6 @@ const priorityLabel = (priority: number) => {
   if (priority >= 4) return "Высокий";
   if (priority >= 2) return "Средний";
   return "Низкий";
-};
-
-const progressByComputed: Record<ComputedState, number> = {
-  DONE: 100,
-  DROPPED: 0,
-  BLOCKED: 0,
-  LOCKED: 0,
-  ACTIVE: 60,
-  AVAILABLE: 35,
 };
 
 const priorityTone = (priority: number) => {
@@ -127,40 +130,257 @@ const stateTone: Record<
 
 const stateTitle: Record<ComputedState, string> = {
   AVAILABLE: "Доступно",
-  ACTIVE: "В фокусе",
+  ACTIVE: "В работе",
   LOCKED: "Ждет зависимости",
   BLOCKED: "Заблокировано",
   DONE: "Завершено",
   DROPPED: "Отменено",
 };
 
+type RectNode = {
+  centerX: number;
+  centerY: number;
+  halfW: number;
+  halfH: number;
+};
+
+function getIntersectionPoint(from: RectNode, to: RectNode) {
+  const dx = to.centerX - from.centerX;
+  const dy = to.centerY - from.centerY;
+  const ratio = Math.max(
+    Math.abs(dx) / Math.max(from.halfW, 1),
+    Math.abs(dy) / Math.max(from.halfH, 1),
+  );
+
+  if (!Number.isFinite(ratio) || ratio === 0) {
+    return { x: from.centerX, y: from.centerY };
+  }
+
+  return {
+    x: from.centerX + dx / ratio,
+    y: from.centerY + dy / ratio,
+  };
+}
+
+function nudgePointTowards(from: { x: number; y: number }, to: { x: number; y: number }, distance: number) {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const len = Math.hypot(dx, dy);
+
+  if (!len || !Number.isFinite(len)) return from;
+
+  return {
+    x: from.x + (dx / len) * distance,
+    y: from.y + (dy / len) * distance,
+  };
+}
+
+function getArrowPath(start: { x: number; y: number }, end: { x: number; y: number }) {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const length = Math.hypot(dx, dy) || 1;
+  const ux = dx / length;
+  const uy = dy / length;
+  const baseX = end.x - ux * EDGE_ARROW_LENGTH;
+  const baseY = end.y - uy * EDGE_ARROW_LENGTH;
+  const perpX = -uy;
+  const perpY = ux;
+
+  return `M ${end.x} ${end.y} L ${baseX + perpX * EDGE_ARROW_HALF_WIDTH} ${
+    baseY + perpY * EDGE_ARROW_HALF_WIDTH
+  } L ${baseX - perpX * EDGE_ARROW_HALF_WIDTH} ${baseY - perpY * EDGE_ARROW_HALF_WIDTH} Z`;
+}
+
+function BoundaryStraightEdge({ id, source, target, style }: EdgeProps) {
+  const sourceNode = useInternalNode(source);
+  const targetNode = useInternalNode(target);
+
+  if (!sourceNode || !targetNode) return null;
+
+  const sourceWidth = sourceNode.measured.width ?? sourceNode.width ?? DEFAULT_NODE_WIDTH;
+  const sourceHeight = sourceNode.measured.height ?? sourceNode.height ?? DEFAULT_NODE_HEIGHT;
+  const targetWidth = targetNode.measured.width ?? targetNode.width ?? DEFAULT_NODE_WIDTH;
+  const targetHeight = targetNode.measured.height ?? targetNode.height ?? DEFAULT_NODE_HEIGHT;
+
+  const sourceRect: RectNode = {
+    centerX: sourceNode.internals.positionAbsolute.x + sourceWidth / 2,
+    centerY: sourceNode.internals.positionAbsolute.y + sourceHeight / 2,
+    halfW: sourceWidth / 2,
+    halfH: sourceHeight / 2,
+  };
+  const targetRect: RectNode = {
+    centerX: targetNode.internals.positionAbsolute.x + targetWidth / 2,
+    centerY: targetNode.internals.positionAbsolute.y + targetHeight / 2,
+    halfW: targetWidth / 2,
+    halfH: targetHeight / 2,
+  };
+
+  const sourcePoint = nudgePointTowards(getIntersectionPoint(sourceRect, targetRect), targetRect, 1);
+  const targetPoint = getIntersectionPoint(targetRect, sourceRect);
+
+  const [edgePath] = getStraightPath({
+    sourceX: sourcePoint.x,
+    sourceY: sourcePoint.y,
+    targetX: targetPoint.x,
+    targetY: targetPoint.y,
+  });
+  const arrowPath = getArrowPath(sourcePoint, targetPoint);
+
+  return (
+    <g data-id={id}>
+      <path d={edgePath} fill="none" stroke={EDGE_STROKE} strokeWidth={EDGE_WIDTH} style={style} />
+      <path d={arrowPath} fill={EDGE_STROKE} />
+    </g>
+  );
+}
+
+function BoundaryConnectionLine({
+  fromNode,
+  toNode,
+  fromX,
+  fromY,
+  toX,
+  toY,
+}: ConnectionLineComponentProps) {
+  const sourceWidth = fromNode ? (fromNode.measured.width ?? fromNode.width ?? DEFAULT_NODE_WIDTH) : 0;
+  const sourceHeight = fromNode ? (fromNode.measured.height ?? fromNode.height ?? DEFAULT_NODE_HEIGHT) : 0;
+  const targetWidth = toNode ? (toNode.measured.width ?? toNode.width ?? DEFAULT_NODE_WIDTH) : 0;
+  const targetHeight = toNode ? (toNode.measured.height ?? toNode.height ?? DEFAULT_NODE_HEIGHT) : 0;
+
+  const sourceRect: RectNode | null = fromNode
+    ? {
+        centerX: fromNode.internals.positionAbsolute.x + sourceWidth / 2,
+        centerY: fromNode.internals.positionAbsolute.y + sourceHeight / 2,
+        halfW: sourceWidth / 2,
+        halfH: sourceHeight / 2,
+      }
+    : null;
+
+  const targetRect: RectNode | null = toNode
+    ? {
+        centerX: toNode.internals.positionAbsolute.x + targetWidth / 2,
+        centerY: toNode.internals.positionAbsolute.y + targetHeight / 2,
+        halfW: targetWidth / 2,
+        halfH: targetHeight / 2,
+      }
+    : null;
+
+  const sourceAnchor = sourceRect
+    ? nudgePointTowards(
+        getIntersectionPoint(sourceRect, targetRect ?? { centerX: toX, centerY: toY, halfW: 1, halfH: 1 }),
+        targetRect ?? { centerX: toX, centerY: toY, halfW: 1, halfH: 1 },
+        1,
+      )
+    : { x: fromX, y: fromY };
+  const targetAnchor = targetRect
+    ? getIntersectionPoint(targetRect, sourceRect ?? { centerX: fromX, centerY: fromY, halfW: 1, halfH: 1 })
+    : { x: toX, y: toY };
+
+  const arrowPath = getArrowPath(sourceAnchor, targetAnchor);
+
+  return (
+    <g>
+      <path
+        d={`M ${sourceAnchor.x} ${sourceAnchor.y} L ${targetAnchor.x} ${targetAnchor.y}`}
+        fill="none"
+        stroke={EDGE_STROKE}
+        strokeWidth={EDGE_WIDTH}
+      />
+      <path d={arrowPath} fill={EDGE_STROKE} />
+    </g>
+  );
+}
+
 function GoalNode({ data, selected }: NodeProps<Node<GoalNodeData>>) {
   const tone = stateTone[data.computedState];
-  const progress = progressByComputed[data.computedState];
-  const ring = `conic-gradient(#8B944C ${progress * 3.6}deg, rgba(255,255,255,.1) 0deg)`;
+  const isDimmed = data.computedState === "LOCKED" || data.computedState === "BLOCKED";
+  const targetHandleStyle = {
+    left: "-3px",
+    top: "-3px",
+    width: "calc(100% + 6px)",
+    height: "calc(100% + 6px)",
+    transform: "none",
+    borderRadius: "19px",
+    background: "transparent",
+    border: "none",
+    opacity: 0,
+    zIndex: 30,
+    pointerEvents: "all" as const,
+  };
+  const sourceHandleBaseStyle = {
+    transform: "none",
+    borderRadius: 0,
+    background: "transparent",
+    border: "none",
+    opacity: 0,
+    zIndex: 40,
+    pointerEvents: "all" as const,
+  };
 
   return (
     <div
       className={`relative min-h-24 min-w-64 rounded-2xl border px-4 py-3 shadow-[0_12px_28px_rgba(0,0,0,.25)] transition ${
         tone.border
-      } ${tone.card} ${selected ? "ring-1 ring-[#D39A43] shadow-[0_0_0_1px_rgba(211,154,67,.7),0_0_28px_rgba(211,154,67,.16)]" : ""}`}
+      } ${tone.card} ${isDimmed ? "opacity-[0.64] saturate-[0.58]" : ""} ${
+        selected ? "ring-1 ring-[#D39A43] shadow-[0_0_0_1px_rgba(211,154,67,.7),0_0_28px_rgba(211,154,67,.16)]" : ""
+      }`}
     >
-      <Handle type="target" position={Position.Left} className="!h-2.5 !w-2.5 !border-none !bg-[#B8B0A3]" />
+      <Handle type="target" position={Position.Left} style={targetHandleStyle} />
+      <Handle
+        id="source-top"
+        type="source"
+        position={Position.Top}
+        style={{
+          ...sourceHandleBaseStyle,
+          left: 0,
+          top: "-3px",
+          width: "100%",
+          height: "6px",
+        }}
+      />
+      <Handle
+        id="source-right"
+        type="source"
+        position={Position.Right}
+        style={{
+          ...sourceHandleBaseStyle,
+          right: "-3px",
+          top: 0,
+          width: "6px",
+          height: "100%",
+        }}
+      />
+      <Handle
+        id="source-bottom"
+        type="source"
+        position={Position.Bottom}
+        style={{
+          ...sourceHandleBaseStyle,
+          left: 0,
+          bottom: "-3px",
+          width: "100%",
+          height: "6px",
+        }}
+      />
+      <Handle
+        id="source-left"
+        type="source"
+        position={Position.Left}
+        style={{
+          ...sourceHandleBaseStyle,
+          left: "-3px",
+          top: 0,
+          width: "6px",
+          height: "100%",
+        }}
+      />
 
       <div className="relative z-10 flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="truncate text-[15px] font-semibold text-[#F2EEE6]">{data.title || "Untitled goal"}</p>
           <p className="mt-1 text-[11px] text-[#B8B0A3]">{typeLabel[data.type]}</p>
         </div>
-        <div className="flex items-center gap-2">
-          <span className={`h-2.5 w-2.5 rounded-full ${tone.dot}`} />
-          <div
-            className="grid h-9 w-9 place-items-center rounded-full border border-white/10 text-[10px] font-semibold text-[#D8C8A8]"
-            style={{ backgroundImage: ring }}
-          >
-            <span className="grid h-7 w-7 place-items-center rounded-full bg-[#161817]">{progress}%</span>
-          </div>
-        </div>
+        <span className={`mt-1 h-2.5 w-2.5 rounded-full ${tone.dot}`} />
       </div>
 
       <div className="relative z-10 mt-3 flex items-center justify-between">
@@ -168,7 +388,6 @@ function GoalNode({ data, selected }: NodeProps<Node<GoalNodeData>>) {
         <span className={`text-[11px] ${priorityTone(data.priority)}`}>⚑ {priorityLabel(data.priority)}</span>
       </div>
 
-      <Handle type="source" position={Position.Right} className="!h-2.5 !w-2.5 !border-none !bg-[#B8B0A3]" />
     </div>
   );
 }
@@ -228,8 +447,21 @@ function toFlowEdge(edge: ApiEdge): Edge {
     id: edge.id,
     source: edge.sourceId,
     target: edge.targetId,
-    type: "bezier",
+    type: "boundaryStraight",
   };
+}
+
+function getConnectErrorMessage(rawMessage: string) {
+  if (rawMessage.includes("Duplicate edge")) {
+    return "Такая связь уже существует.";
+  }
+  if (rawMessage.includes("Cycle detected")) {
+    return "Нельзя создать связь: получится цикл зависимостей.";
+  }
+  if (rawMessage.includes("Self-edge")) {
+    return "Нельзя создавать связь цели с самой собой.";
+  }
+  return rawMessage;
 }
 
 function spreadOverlappingNodes(nodes: Node<GoalNodeData>[]): Node<GoalNodeData>[] {
@@ -289,6 +521,7 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
     [nodes, selectedGoalId],
   );
   const nodeTypes = useMemo(() => ({ goalNode: GoalNode }), []);
+  const edgeTypes = useMemo(() => ({ boundaryStraight: BoundaryStraightEdge }), []);
   const activeGoals = useMemo(
     () => nextGoals.filter((goal) => goal.computedState === "ACTIVE"),
     [nextGoals],
@@ -343,10 +576,6 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
             hidden: !matchesSearch(node.data.title),
           })),
     [matchesSearch, nodes, query.length],
-  );
-  const suggestedGoal = useMemo(
-    () => availableGoalsFiltered[0] ?? activeGoalsFiltered[0] ?? null,
-    [activeGoalsFiltered, availableGoalsFiltered],
   );
   const focusCount = activeGoals.length;
   const startableCount = availableGoals.length;
@@ -513,7 +742,11 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
       });
       void loadNext();
     } catch (connectError) {
-      setError(connectError instanceof Error ? connectError.message : "Failed to create edge");
+      if (connectError instanceof Error) {
+        setError(getConnectErrorMessage(connectError.message));
+      } else {
+        setError("Не удалось создать связь.");
+      }
     }
   }, [loadNext]);
 
@@ -629,20 +862,7 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
               value={searchQuery}
               onChange={(event) => setSearchQuery(event.target.value)}
             />
-            <span className="rounded border border-white/10 px-1.5 py-0.5 text-[10px] text-[#B8B0A3]">⌘K</span>
           </div>
-        </div>
-
-        <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-[#181B1A] p-1 text-sm text-[#B8B0A3]">
-          <button type="button" className="rounded-lg bg-white/10 px-3 py-1.5 text-[#F2EEE6]">
-            Graph
-          </button>
-          <button type="button" className="rounded-lg px-3 py-1.5 hover:bg-white/5">
-            List
-          </button>
-          <button type="button" className="rounded-lg px-3 py-1.5 hover:bg-white/5">
-            Timeline
-          </button>
         </div>
 
         <button
@@ -656,7 +876,7 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
         <div className="flex items-center gap-4 text-xs text-[#B8B0A3]">
           <div className="text-right">
             <p className="text-[#F2EEE6]">{focusCount}</p>
-            <p>в фокусе</p>
+            <p>в работе</p>
           </div>
           <div className="text-right">
             <p className="text-[#F2EEE6]">{startableCount}</p>
@@ -685,7 +905,7 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
           <div className="space-y-5">
             <section>
               <div className="mb-2 flex items-center justify-between">
-                <h3 className="text-xs font-semibold uppercase tracking-[0.06em] text-[#8A857B]">В фокусе</h3>
+                <h3 className="text-xs font-semibold uppercase tracking-[0.06em] text-[#8A857B]">В работе</h3>
                 <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-[#B8B0A3]">
                   {activeGoalsFiltered.length}
                 </span>
@@ -748,7 +968,7 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
                   {blockedCount}
                 </span>
               </div>
-              <div className="space-y-1 text-sm text-[#8A857B]">
+              <div className="space-y-1 text-sm text-[#6F6A62]">
                 {blockedGoalsFiltered.length === 0 ? (
                   <p className="text-[#777268]">Нет</p>
                 ) : (
@@ -773,17 +993,6 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
         </aside>
 
         <section className="goal-graph-flow relative h-full min-w-0 flex-1">
-          {suggestedGoal ? (
-            <button
-              type="button"
-              className="absolute left-1/2 top-4 z-10 -translate-x-1/2 rounded-xl border border-[#D39A43]/45 bg-[#1E211F]/95 px-4 py-2 text-left shadow-[0_12px_26px_rgba(0,0,0,.24)] hover:border-[#D39A43]/65"
-              onClick={() => setSelectedGoalId(suggestedGoal.id)}
-            >
-              <p className="text-[11px] uppercase tracking-[0.06em] text-[#B8B0A3]">Suggested next step</p>
-              <p className="mt-1 text-sm font-medium text-[#F2EEE6]">{suggestedGoal.title}</p>
-            </button>
-          ) : null}
-
           {error ? (
             <div className="absolute left-4 top-4 z-10 rounded-xl border border-[#A94F3D]/40 bg-[#2A1A18] px-3 py-2 text-sm text-[#F3B1A4]">
               {error}
@@ -793,8 +1002,12 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
           <ReactFlow
             className="h-full"
             nodeTypes={nodeTypes}
+            edgeTypes={edgeTypes}
+            connectionLineType={ConnectionLineType.Straight}
+            connectionLineComponent={BoundaryConnectionLine}
             nodes={visibleNodes}
             edges={edges}
+            proOptions={{ hideAttribution: true }}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onNodeClick={onNodeClick}
@@ -802,7 +1015,8 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
             onConnect={onConnect}
             onEdgeDoubleClick={onEdgeDoubleClick}
             defaultEdgeOptions={{
-              style: { stroke: "rgba(216,200,168,.35)", strokeWidth: 1.2 },
+              type: "boundaryStraight",
+              style: { stroke: EDGE_STROKE, strokeWidth: EDGE_WIDTH },
             }}
             fitView
           >
@@ -811,12 +1025,13 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
               pannable
               zoomable
               position="bottom-right"
+              maskColor="rgba(16,18,17,0.25)"
               style={{
                 width: 210,
                 height: 130,
                 borderRadius: 12,
-                backgroundColor: "rgba(29,32,30,.85)",
-                border: "1px solid rgba(255,255,255,.08)",
+                backgroundColor: "rgba(23,25,24,0.9)",
+                border: "1px solid rgba(255,255,255,.06)",
               }}
               nodeColor={(node) => {
                 const n = node as Node<GoalNodeData>;
@@ -829,19 +1044,9 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
             />
             <Controls position="bottom-left" />
           </ReactFlow>
-
-          <div className="absolute bottom-4 left-4 z-10 flex gap-2">
-            <button
-              type="button"
-              className="rounded-lg border border-white/10 bg-[#1D201E]/90 px-3 py-1.5 text-xs text-[#B8B0A3] hover:bg-[#252926]"
-              onClick={() => {
-                void loadNext();
-              }}
-            >
-              Обновить рекомендации
-            </button>
-            {isLoading ? <span className="text-xs text-[#8A857B]">Загрузка...</span> : null}
-          </div>
+          {isLoading ? (
+            <div className="absolute bottom-4 left-4 z-10 text-xs text-[#8A857B]">Загрузка...</div>
+          ) : null}
         </section>
 
         <aside className="w-[340px] overflow-y-auto border-l border-white/10 bg-[#171918] px-4 py-5">
@@ -868,15 +1073,9 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
                 </span>
               </div>
 
-              <div className="grid grid-cols-2 gap-2">
-                <div className="rounded-xl border border-white/10 bg-[#1D201E] px-3 py-2">
-                  <p className="text-[11px] text-[#8A857B]">Приоритет</p>
-                  <p className={`mt-1 text-sm ${priorityTone(selectedPriority)}`}>⚑ {priorityLabel(selectedPriority)}</p>
-                </div>
-                <div className="rounded-xl border border-white/10 bg-[#1D201E] px-3 py-2">
-                  <p className="text-[11px] text-[#8A857B]">Прогресс</p>
-                  <p className="mt-1 text-sm text-[#A1AA7B]">{progressByComputed[selectedGoalNode.data.computedState]}%</p>
-                </div>
+              <div className="rounded-xl border border-white/10 bg-[#1D201E] px-3 py-2">
+                <p className="text-[11px] text-[#8A857B]">Приоритет</p>
+                <p className={`mt-1 text-sm ${priorityTone(selectedPriority)}`}>⚑ {priorityLabel(selectedPriority)}</p>
               </div>
 
               <label className="block text-xs text-[#B8B0A3]">
