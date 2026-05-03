@@ -941,7 +941,7 @@ spec:
 [x] можно соединить goals
 [x] можно удалить edge
 [x] можно поменять статус
-[ ] available goals считаются корректно
+[x] available goals считаются корректно
 [x] позиции нод сохраняются
 [ ] Docker image билдится
 [x] контейнер стартует с DATABASE_URL
@@ -970,7 +970,7 @@ spec:
 computed state + sidebar next goals + drawer edit
 ```
 
-Статус: [~] частично (drawer edit сделан, computed state и next goals пока нет).
+Статус: [x] реализовано.
 
 Это делает продукт полезным.
 
@@ -1012,8 +1012,8 @@ custom node design + cycle detection + basic auth + seed
 5. [x] drag save position
 6. [x] create edge
 7. [x] edit status
-8. [ ] computed available/locked
-9. [ ] sidebar next actions
+8. [x] computed available/locked
+9. [x] sidebar next actions
 10. [~] Docker + k3s (сейчас только docker-compose для dev)
 ```
 

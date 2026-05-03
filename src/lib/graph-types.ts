@@ -1,5 +1,6 @@
 export type GoalStatus = "TODO" | "ACTIVE" | "DONE" | "BLOCKED" | "DROPPED";
 export type GoalType = "EPIC" | "MILESTONE" | "TASK" | "HABIT";
+export type ComputedState = "DONE" | "DROPPED" | "BLOCKED" | "LOCKED" | "ACTIVE" | "AVAILABLE";
 
 export type ApiGoal = {
   id: string;
@@ -10,6 +11,8 @@ export type ApiGoal = {
   type: GoalType;
   x: number;
   y: number;
+  createdAt?: string | Date;
+  updatedAt: string | Date;
 };
 
 export type ApiEdge = {
@@ -22,4 +25,21 @@ export type ApiEdge = {
 export type GraphResponse = {
   goals: ApiGoal[];
   edges: ApiEdge[];
+};
+
+export type GoalBlocker = {
+  id: string;
+  title: string;
+  status: GoalStatus;
+};
+
+export type NextGoalItem = {
+  id: string;
+  title: string;
+  priority: number;
+  type: GoalType;
+  status: GoalStatus;
+  computedState: ComputedState;
+  blockedBy: GoalBlocker[];
+  updatedAt: string | Date;
 };
