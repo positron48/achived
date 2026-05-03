@@ -1,0 +1,55 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Goal {
+  id            String      @id @default(cuid())
+  title         String
+  description   String      @default("")
+  status        GoalStatus  @default(TODO)
+  priority      Int         @default(3)
+  type          GoalType    @default(TASK)
+  x             Float       @default(0)
+  y             Float       @default(0)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  outgoingEdges GoalEdge[]  @relation("SourceGoal")
+  incomingEdges GoalEdge[]  @relation("TargetGoal")
+}
+
+model GoalEdge {
+  id        String   @id @default(cuid())
+  sourceId  String
+  targetId  String
+  source    Goal     @relation("SourceGoal", fields: [sourceId], references: [id], onDelete: Cascade)
+  target    Goal     @relation("TargetGoal", fields: [targetId], references: [id], onDelete: Cascade)
+  type      EdgeType @default(REQUIRES)
+  createdAt DateTime @default(now())
+
+  @@unique([sourceId, targetId, type])
+}
+
+enum GoalStatus {
+  TODO
+  ACTIVE
+  DONE
+  BLOCKED
+  DROPPED
+}
+
+enum GoalType {
+  EPIC
+  MILESTONE
+  TASK
+  HABIT
+}
+
+enum EdgeType {
+  REQUIRES
+  RELATED
+}

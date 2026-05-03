@@ -1,0 +1,44 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: goalgraph-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: goalgraph
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d goalgraph"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - goalgraph_postgres_data:/var/lib/postgresql/data
+
+  app:
+    image: node:20-alpine
+    container_name: goalgraph-app
+    restart: unless-stopped
+    working_dir: /app
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/goalgraph?schema=public
+      NODE_ENV: development
+    ports:
+      - "${APP_PORT:-3001}:3000"
+    volumes:
+      - .:/app
+      - goalgraph_node_modules:/app/node_modules
+    command: >
+      sh -c "npm install &&
+             npx prisma generate &&
+             npx prisma db push &&
+             npm run dev -- --hostname 0.0.0.0 --port 3000"
+
+volumes:
+  goalgraph_postgres_data:
+  goalgraph_node_modules:
