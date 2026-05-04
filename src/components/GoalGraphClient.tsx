@@ -1379,11 +1379,17 @@ function GoalGraphClientInner({
     [query],
   );
   const activeGoalsFiltered = useMemo(
-    () => activeGoals.filter((goal) => matchesSearch(goal.title)),
+    () =>
+      activeGoals
+        .filter((goal) => matchesSearch(goal.title))
+        .sort((a, b) => b.priority - a.priority || a.title.localeCompare(b.title)),
     [activeGoals, matchesSearch],
   );
   const availableGoalsFiltered = useMemo(
-    () => availableGoals.filter((goal) => matchesSearch(goal.title)),
+    () =>
+      availableGoals
+        .filter((goal) => matchesSearch(goal.title))
+        .sort((a, b) => b.priority - a.priority || a.title.localeCompare(b.title)),
     [availableGoals, matchesSearch],
   );
   const blockedGoals = useMemo(
