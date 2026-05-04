@@ -1,6 +1,6 @@
 import { GoalGraphClient } from "@/components/GoalGraphClient";
 import { GoogleSignInButton } from "@/components/GoogleSignInButton";
-import type { BoardSummary } from "@/lib/graph-types";
+import { dbEdgeRowToApiEdge, type BoardSummary } from "@/lib/graph-types";
 import { getUserBoardRole } from "@/server/board-access";
 import { getSessionUser } from "@/server/auth-session";
 import { ensureUserHasBoard } from "@/server/boards";
@@ -85,13 +85,15 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         sourceId: true,
         targetId: true,
         type: true,
+        waypoints: true,
       },
       orderBy: {
         createdAt: "asc",
       },
     }),
   ]);
-  const initialNext = getNextGoals(goals, edges);
+  const apiEdges = edges.map(dbEdgeRowToApiEdge);
+  const initialNext = getNextGoals(goals, apiEdges);
 
   return (
     <main className="flex h-screen w-full flex-col">
@@ -100,7 +102,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         currentBoardId={selectedBoard.id}
         currentBoardRole={resolvedRole}
         currentUserEmail={user.email}
-        initialGraph={{ goals, edges }}
+        initialGraph={{ goals, edges: apiEdges }}
         initialNext={initialNext}
       />
     </main>

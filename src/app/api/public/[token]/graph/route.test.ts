@@ -24,7 +24,9 @@ describe("GET /api/public/:token/graph", () => {
   it("returns read-only graph for valid token", async () => {
     mockPrisma.board.findFirst.mockResolvedValueOnce({ id: "b1", title: "Shared board" });
     mockPrisma.goal.findMany.mockResolvedValueOnce([{ id: "g1" }]);
-    mockPrisma.goalEdge.findMany.mockResolvedValueOnce([{ id: "e1" }]);
+    mockPrisma.goalEdge.findMany.mockResolvedValueOnce([
+      { id: "e1", sourceId: "g1", targetId: "g2", type: "REQUIRES", waypoints: null },
+    ]);
 
     const { GET } = await import("./route");
     const response = await GET(new Request("http://localhost/api/public/token/graph"), {
@@ -35,6 +37,8 @@ describe("GET /api/public/:token/graph", () => {
     expect(response.status).toBe(200);
     expect(payload.board.readOnly).toBe(true);
     expect(payload.goals).toEqual([{ id: "g1" }]);
-    expect(payload.edges).toEqual([{ id: "e1" }]);
+    expect(payload.edges).toEqual([
+      { id: "e1", sourceId: "g1", targetId: "g2", type: "REQUIRES" },
+    ]);
   });
 });

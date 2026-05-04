@@ -15,12 +15,47 @@ export type ApiGoal = {
   updatedAt: string | Date;
 };
 
+export type EdgeWaypoint = { x: number; y: number };
+
 export type ApiEdge = {
   id: string;
   sourceId: string;
   targetId: string;
   type: "REQUIRES" | "RELATED";
+  waypoints?: EdgeWaypoint[] | null;
 };
+
+/** Парсинг JSON-поля waypoints из Prisma в массив точек (для клиента и типизации). */
+export function normalizeEdgeWaypointsArray(raw: unknown): EdgeWaypoint[] {
+  if (!Array.isArray(raw)) return [];
+  const out: EdgeWaypoint[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const x = (item as { x?: unknown }).x;
+    const y = (item as { y?: unknown }).y;
+    if (typeof x === "number" && typeof y === "number" && Number.isFinite(x) && Number.isFinite(y)) {
+      out.push({ x, y });
+    }
+  }
+  return out;
+}
+
+export function dbEdgeRowToApiEdge(row: {
+  id: string;
+  sourceId: string;
+  targetId: string;
+  type: ApiEdge["type"];
+  waypoints?: unknown | null;
+}): ApiEdge {
+  const waypoints = normalizeEdgeWaypointsArray(row.waypoints);
+  return {
+    id: row.id,
+    sourceId: row.sourceId,
+    targetId: row.targetId,
+    type: row.type,
+    ...(waypoints.length > 0 ? { waypoints } : {}),
+  };
+}
 
 export type GraphResponse = {
   goals: ApiGoal[];

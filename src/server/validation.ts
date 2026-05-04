@@ -19,6 +19,15 @@ export const createEdgeSchema = z.object({
   type: z.enum(["REQUIRES", "RELATED"]).optional(),
 });
 
+const edgeWaypointSchema = z.object({
+  x: z.number().finite(),
+  y: z.number().finite(),
+});
+
+export const updateEdgeWaypointsSchema = z.object({
+  waypoints: z.union([z.array(edgeWaypointSchema).max(64), z.null()]),
+});
+
 export const createBoardSchema = z.object({
   title: z.string().trim().min(1).max(120),
 });

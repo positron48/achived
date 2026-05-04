@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { dbEdgeRowToApiEdge } from "@/lib/graph-types";
 import { boardRoleSatisfies, getBoardIdFromRequest, getUserBoardRole } from "@/server/board-access";
 import { getSessionUser } from "@/server/auth-session";
 import { prisma } from "@/server/db";
@@ -20,7 +21,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Board not found or access denied" }, { status: 403 });
   }
 
-  const [goals, edges] = await Promise.all([
+  const [goals, edgeRows] = await Promise.all([
     prisma.goal.findMany({
       where: { boardId },
       orderBy: {
@@ -29,11 +30,20 @@ export async function GET(request: Request) {
     }),
     prisma.goalEdge.findMany({
       where: { boardId },
+      select: {
+        id: true,
+        sourceId: true,
+        targetId: true,
+        type: true,
+        waypoints: true,
+      },
       orderBy: {
         createdAt: "asc",
       },
     }),
   ]);
+
+  const edges = edgeRows.map(dbEdgeRowToApiEdge);
 
   return NextResponse.json({ goals, edges });
 }

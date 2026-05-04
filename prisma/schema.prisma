@@ -35,6 +35,8 @@ model GoalEdge {
   source    Goal     @relation("SourceGoal", fields: [sourceId], references: [id], onDelete: Cascade)
   target    Goal     @relation("TargetGoal", fields: [targetId], references: [id], onDelete: Cascade)
   type      EdgeType @default(REQUIRES)
+  /// Точки излома в координатах React Flow (абсолютные), упорядочены от source к target.
+  waypoints Json?
   createdAt DateTime @default(now())
 
   @@unique([boardId, sourceId, targetId, type])

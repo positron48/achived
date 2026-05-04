@@ -1,4 +1,5 @@
 import { GoalGraphClient } from "@/components/GoalGraphClient";
+import { dbEdgeRowToApiEdge } from "@/lib/graph-types";
 import { prisma } from "@/server/db";
 import { getNextGoals } from "@/server/domain";
 
@@ -32,16 +33,24 @@ export default async function SharePage({ params }: SharePageProps) {
     );
   }
 
-  const [goals, edges] = await Promise.all([
+  const [goals, edgeRows] = await Promise.all([
     prisma.goal.findMany({
       where: { boardId: board.id },
       orderBy: { createdAt: "asc" },
     }),
     prisma.goalEdge.findMany({
       where: { boardId: board.id },
+      select: {
+        id: true,
+        sourceId: true,
+        targetId: true,
+        type: true,
+        waypoints: true,
+      },
       orderBy: { createdAt: "asc" },
     }),
   ]);
+  const edges = edgeRows.map(dbEdgeRowToApiEdge);
   const initialNext = getNextGoals(goals, edges);
 
   return (

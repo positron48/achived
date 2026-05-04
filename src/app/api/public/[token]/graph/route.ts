@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { dbEdgeRowToApiEdge } from "@/lib/graph-types";
 import { prisma } from "@/server/db";
 
 type Context = {
@@ -25,16 +26,25 @@ export async function GET(_: Request, { params }: Context) {
     return NextResponse.json({ error: "Share link not found" }, { status: 404 });
   }
 
-  const [goals, edges] = await Promise.all([
+  const [goals, edgeRows] = await Promise.all([
     prisma.goal.findMany({
       where: { boardId: board.id },
       orderBy: { createdAt: "asc" },
     }),
     prisma.goalEdge.findMany({
       where: { boardId: board.id },
+      select: {
+        id: true,
+        sourceId: true,
+        targetId: true,
+        type: true,
+        waypoints: true,
+      },
       orderBy: { createdAt: "asc" },
     }),
   ]);
+
+  const edges = edgeRows.map(dbEdgeRowToApiEdge);
 
   return NextResponse.json({
     board: {

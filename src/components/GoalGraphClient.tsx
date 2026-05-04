@@ -11,7 +11,6 @@ import {
   ControlButton,
   Controls,
   type EdgeProps,
-  getStraightPath,
   Handle,
   MiniMap,
   type NodeProps,
@@ -31,26 +30,31 @@ import "@xyflow/react/dist/style.css";
 import Link from "next/link";
 import { createPortal } from "react-dom";
 import {
+  createContext,
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
 } from "react";
 
-import type {
-  ApiEdge,
-  ApiGoal,
-  BoardMemberItem,
-  BoardRole,
-  BoardSummary,
-  ComputedState,
-  GoalStatus,
-  GoalType,
-  GraphResponse,
-  NextGoalItem,
+import {
+  normalizeEdgeWaypointsArray,
+  type ApiEdge,
+  type ApiGoal,
+  type BoardMemberItem,
+  type BoardRole,
+  type BoardSummary,
+  type ComputedState,
+  type GoalStatus,
+  type GoalType,
+  type EdgeWaypoint,
+  type GraphResponse,
+  type NextGoalItem,
 } from "@/lib/graph-types";
 
 type GoalNodeData = {
@@ -107,6 +111,136 @@ const EDGE_WIDTH = 1.2;
 const EDGE_HIT_WIDTH = EDGE_WIDTH + 4;
 const EDGE_ARROW_LENGTH = 12;
 const EDGE_ARROW_HALF_WIDTH = 4;
+const EDGE_HANDLE_RADIUS = 5;
+const EDGE_MID_HANDLE_RADIUS = 4;
+/** Не показывать «серединную» точку на очень коротком отрезке (кроме случая без waypoints). */
+const EDGE_MIN_SEGMENT_FOR_MID_HANDLE = 40;
+/** Радиус скругления углов полилинии (дуги окружности вместо Bézier). */
+const EDGE_CORNER_RADIUS = 52;
+
+type XY = { x: number; y: number };
+
+/** Полилиния через точки с скруглениями на waypoint-ах (дуги заданного радиуса). */
+function roundedPolylinePath(
+  points: XY[],
+  baseRadius: number,
+): { d: string; endTangent: XY } | null {
+  const n = points.length;
+  if (n < 2) return null;
+
+  const last = points[n - 1]!;
+
+  if (n === 2) {
+    const a = points[0]!;
+    const dx = last.x - a.x;
+    const dy = last.y - a.y;
+    const len = Math.hypot(dx, dy) || 1;
+    return {
+      d: `M ${a.x} ${a.y} L ${last.x} ${last.y}`,
+      endTangent: { x: dx / len, y: dy / len },
+    };
+  }
+
+  let d = `M ${points[0]!.x} ${points[0]!.y}`;
+  let pen = points[0]!;
+
+  for (let k = 1; k <= n - 2; k++) {
+    const prev = points[k - 1]!;
+    const corner = points[k]!;
+    const next = points[k + 1]!;
+
+    const vin = { x: corner.x - prev.x, y: corner.y - prev.y };
+    const vout = { x: next.x - corner.x, y: next.y - corner.y };
+    const lenIn = Math.hypot(vin.x, vin.y);
+    const lenOut = Math.hypot(vout.x, vout.y);
+    if (!lenIn || !lenOut) continue;
+
+    const eIn = { x: vin.x / lenIn, y: vin.y / lenIn };
+    const eOut = { x: vout.x / lenOut, y: vout.y / lenOut };
+
+    const dot = Math.max(-1, Math.min(1, eIn.x * eOut.x + eIn.y * eOut.y));
+    const cross = eIn.x * eOut.y - eIn.y * eOut.x;
+    const phi = Math.atan2(cross, dot);
+
+    const rCap = Math.min(baseRadius, lenIn * 0.42, lenOut * 0.42);
+    const tanHalf = Math.tan(Math.abs(phi) / 2);
+    if (!Number.isFinite(tanHalf) || tanHalf <= 1e-6) {
+      d += ` L ${corner.x} ${corner.y}`;
+      pen = corner;
+      continue;
+    }
+    // Для скругления угла trim = r * tan(theta / 2), а не деление.
+    let trim = rCap * tanHalf;
+    trim = Math.min(trim, lenIn * 0.499, lenOut * 0.499);
+
+    const absPhi = Math.abs(phi);
+    const nearlyStraight = absPhi < 0.08;
+    const nearUTurn = Math.PI - absPhi < 0.08;
+    const tinyTrim = trim < 1.25;
+
+    if (nearlyStraight || nearUTurn || tinyTrim || !Number.isFinite(trim)) {
+      d += ` L ${corner.x} ${corner.y}`;
+      pen = corner;
+      continue;
+    }
+
+    const qStart = { x: corner.x - eIn.x * trim, y: corner.y - eIn.y * trim };
+    const qEnd = { x: corner.x + eOut.x * trim, y: corner.y + eOut.y * trim };
+
+    const effectiveRadius = Math.max(trim / tanHalf, 1e-3);
+    d += ` L ${qStart.x} ${qStart.y}`;
+    d += svgCircularArcSuffix(qStart, qEnd, effectiveRadius, cross >= 0 ? 1 : 0);
+    pen = qEnd;
+  }
+
+  d += ` L ${last.x} ${last.y}`;
+  const dx = last.x - pen.x;
+  const dy = last.y - pen.y;
+  const len = Math.hypot(dx, dy) || 1;
+  return { d, endTangent: { x: dx / len, y: dy / len } };
+}
+
+/** Фрагмент path после текущей точки qStart: малая дуга до qEnd. */
+function svgCircularArcSuffix(
+  q1: XY,
+  q2: XY,
+  rNominal: number,
+  sweepFlag: 0 | 1,
+): string {
+  const dx = q2.x - q1.x;
+  const dy = q2.y - q1.y;
+  const chord = Math.hypot(dx, dy);
+  if (chord < 1e-9) return "";
+
+  let radius = rNominal;
+  const halfChord = chord / 2;
+  if (halfChord > radius - 1e-9) {
+    radius = halfChord + 1e-6;
+  }
+
+  return ` A ${radius} ${radius} 0 0 ${sweepFlag} ${q2.x} ${q2.y}`;
+}
+
+const EdgeWaypointActionsContext = createContext<{
+  isEditor: boolean;
+  updateWaypoints: (edgeId: string, waypoints: EdgeWaypoint[]) => void;
+  /** Прилипание точек связи к сетке (узлы — через snapToGrid у React Flow). */
+  gridSnapEnabled: boolean;
+} | null>(null);
+
+/** Наконечник стрелки по направлению кривой у целевого узла (tangentUnit — единичный вектор «внутрь» к target). */
+function getArrowHeadPath(end: XY, tangentUnit: XY) {
+  const ux = tangentUnit.x;
+  const uy = tangentUnit.y;
+  const baseX = end.x - ux * EDGE_ARROW_LENGTH;
+  const baseY = end.y - uy * EDGE_ARROW_LENGTH;
+  const perpX = -uy;
+  const perpY = ux;
+
+  return `M ${end.x} ${end.y} L ${baseX + perpX * EDGE_ARROW_HALF_WIDTH} ${
+    baseY + perpY * EDGE_ARROW_HALF_WIDTH
+  } L ${baseX - perpX * EDGE_ARROW_HALF_WIDTH} ${baseY - perpY * EDGE_ARROW_HALF_WIDTH} Z`;
+}
 
 const statusLabel: Record<GoalStatus, string> = {
   TODO: "В планах",
@@ -216,6 +350,88 @@ function getIntersectionPoint(from: RectNode, to: RectNode) {
   };
 }
 
+/** Граница узла по лучу из центра к точке «куда идём» (учитывает waypoint-ы). */
+function boundaryExitToward(rect: RectNode, toward: XY): XY {
+  const dx = toward.x - rect.centerX;
+  const dy = toward.y - rect.centerY;
+  const ratio = Math.max(
+    Math.abs(dx) / Math.max(rect.halfW, 1),
+    Math.abs(dy) / Math.max(rect.halfH, 1),
+  );
+
+  if (!Number.isFinite(ratio) || ratio === 0) {
+    return { x: rect.centerX, y: rect.centerY };
+  }
+
+  return {
+    x: rect.centerX + dx / ratio,
+    y: rect.centerY + dy / ratio,
+  };
+}
+
+/**
+ * Первая точка на границе целевого узла при движении от waypoint к центру узла
+ * (стрелка входит со стороны траектории, а не центра противоположного блока).
+ */
+function boundaryEntryFromApproach(rect: RectNode, approach: XY): XY {
+  const cx = rect.centerX;
+  const cy = rect.centerY;
+  const xmin = cx - rect.halfW;
+  const xmax = cx + rect.halfW;
+  const ymin = cy - rect.halfH;
+  const ymax = cy + rect.halfH;
+
+  const ax = approach.x;
+  const ay = approach.y;
+  const bx = cx;
+  const by = cy;
+  const ddx = bx - ax;
+  const ddy = by - ay;
+
+  let bestT = Infinity;
+  let best: XY = { x: cx, y: cy };
+
+  const consider = (t: number, px: number, py: number) => {
+    if (t <= 1e-9 || t >= bestT) return;
+    if (!Number.isFinite(px) || !Number.isFinite(py)) return;
+    const onVertical =
+      (Math.abs(px - xmin) < 1e-5 || Math.abs(px - xmax) < 1e-5) &&
+      py >= ymin - 1e-5 &&
+      py <= ymax + 1e-5;
+    const onHorizontal =
+      (Math.abs(py - ymin) < 1e-5 || Math.abs(py - ymax) < 1e-5) &&
+      px >= xmin - 1e-5 &&
+      px <= xmax + 1e-5;
+    if (!(onVertical || onHorizontal)) return;
+    bestT = t;
+    best = { x: px, y: py };
+  };
+
+  if (Math.abs(ddx) > 1e-14) {
+    const tMin = (xmin - ax) / ddx;
+    consider(tMin, xmin, ay + tMin * ddy);
+    const tMax = (xmax - ax) / ddx;
+    consider(tMax, xmax, ay + tMax * ddy);
+  }
+  if (Math.abs(ddy) > 1e-14) {
+    const tBottom = (ymin - ay) / ddy;
+    consider(tBottom, ax + tBottom * ddx, ymin);
+    const tTop = (ymax - ay) / ddy;
+    consider(tTop, ax + tTop * ddx, ymax);
+  }
+
+  if (!Number.isFinite(bestT)) {
+    return getIntersectionPoint(rect, {
+      centerX: ax,
+      centerY: ay,
+      halfW: 1,
+      halfH: 1,
+    });
+  }
+
+  return best;
+}
+
 function nudgePointTowards(from: { x: number; y: number }, to: { x: number; y: number }, distance: number) {
   const dx = to.x - from.x;
   const dy = to.y - from.y;
@@ -233,60 +449,205 @@ function rectCenter(rect: RectNode): { x: number; y: number } {
   return { x: rect.centerX, y: rect.centerY };
 }
 
-function getArrowPath(start: { x: number; y: number }, end: { x: number; y: number }) {
+function getStraightArrowHeadPath(start: XY, end: XY) {
   const dx = end.x - start.x;
   const dy = end.y - start.y;
   const length = Math.hypot(dx, dy) || 1;
   const ux = dx / length;
   const uy = dy / length;
-  const baseX = end.x - ux * EDGE_ARROW_LENGTH;
-  const baseY = end.y - uy * EDGE_ARROW_LENGTH;
-  const perpX = -uy;
-  const perpY = ux;
-
-  return `M ${end.x} ${end.y} L ${baseX + perpX * EDGE_ARROW_HALF_WIDTH} ${
-    baseY + perpY * EDGE_ARROW_HALF_WIDTH
-  } L ${baseX - perpX * EDGE_ARROW_HALF_WIDTH} ${baseY - perpY * EDGE_ARROW_HALF_WIDTH} Z`;
+  return getArrowHeadPath(end, { x: ux, y: uy });
 }
 
-function BoundaryStraightEdge({ id, source, target, style }: EdgeProps) {
+type BoundaryEdgeFlowData = {
+  waypoints?: EdgeWaypoint[];
+};
+
+const EMPTY_EDGE_WAYPOINTS: EdgeWaypoint[] = [];
+
+function BoundaryStraightEdge({
+  id,
+  source,
+  target,
+  style,
+  selected,
+  data,
+}: EdgeProps<Edge<BoundaryEdgeFlowData>>) {
   const sourceNode = useInternalNode(source);
   const targetNode = useInternalNode(target);
+  const reactFlow = useReactFlow();
+  const waypointActions = useContext(EdgeWaypointActionsContext);
 
-  if (!sourceNode || !targetNode) return null;
-
-  const sourceWidth = sourceNode.measured.width ?? sourceNode.width ?? DEFAULT_NODE_WIDTH;
-  const sourceHeight = sourceNode.measured.height ?? sourceNode.height ?? DEFAULT_NODE_HEIGHT;
-  const targetWidth = targetNode.measured.width ?? targetNode.width ?? DEFAULT_NODE_WIDTH;
-  const targetHeight = targetNode.measured.height ?? targetNode.height ?? DEFAULT_NODE_HEIGHT;
-
-  const sourceRect: RectNode = {
-    centerX: sourceNode.internals.positionAbsolute.x + sourceWidth / 2,
-    centerY: sourceNode.internals.positionAbsolute.y + sourceHeight / 2,
-    halfW: sourceWidth / 2,
-    halfH: sourceHeight / 2,
-  };
-  const targetRect: RectNode = {
-    centerX: targetNode.internals.positionAbsolute.x + targetWidth / 2,
-    centerY: targetNode.internals.positionAbsolute.y + targetHeight / 2,
-    halfW: targetWidth / 2,
-    halfH: targetHeight / 2,
-  };
-
-  const sourcePoint = nudgePointTowards(
-    getIntersectionPoint(sourceRect, targetRect),
-    rectCenter(targetRect),
-    1,
+  const committedWaypoints = useMemo(
+    () => data?.waypoints ?? EMPTY_EDGE_WAYPOINTS,
+    [data?.waypoints],
   );
-  const targetPoint = getIntersectionPoint(targetRect, sourceRect);
+  const [dragWaypoints, setDragWaypoints] = useState<EdgeWaypoint[] | null>(null);
+  const dragDraftRef = useRef<EdgeWaypoint[] | null>(null);
+  const dragCleanupRef = useRef<(() => void) | null>(null);
 
-  const [edgePath] = getStraightPath({
-    sourceX: sourcePoint.x,
-    sourceY: sourcePoint.y,
-    targetX: targetPoint.x,
-    targetY: targetPoint.y,
-  });
-  const arrowPath = getArrowPath(sourcePoint, targetPoint);
+  const displayWaypoints = dragWaypoints ?? committedWaypoints;
+
+  useEffect(() => {
+    return () => {
+      dragCleanupRef.current?.();
+    };
+  }, []);
+
+  const geometry = useMemo(() => {
+    if (!sourceNode || !targetNode) return null;
+
+    const sourceWidth = sourceNode.measured.width ?? sourceNode.width ?? DEFAULT_NODE_WIDTH;
+    const sourceHeight = sourceNode.measured.height ?? sourceNode.height ?? DEFAULT_NODE_HEIGHT;
+    const targetWidth = targetNode.measured.width ?? targetNode.width ?? DEFAULT_NODE_WIDTH;
+    const targetHeight = targetNode.measured.height ?? targetNode.height ?? DEFAULT_NODE_HEIGHT;
+
+    const sourceRect: RectNode = {
+      centerX: sourceNode.internals.positionAbsolute.x + sourceWidth / 2,
+      centerY: sourceNode.internals.positionAbsolute.y + sourceHeight / 2,
+      halfW: sourceWidth / 2,
+      halfH: sourceHeight / 2,
+    };
+    const targetRect: RectNode = {
+      centerX: targetNode.internals.positionAbsolute.x + targetWidth / 2,
+      centerY: targetNode.internals.positionAbsolute.y + targetHeight / 2,
+      halfW: targetWidth / 2,
+      halfH: targetHeight / 2,
+    };
+
+    let sourcePoint: XY;
+    let targetPoint: XY;
+
+    if (displayWaypoints.length === 0) {
+      sourcePoint = nudgePointTowards(
+        getIntersectionPoint(sourceRect, targetRect),
+        rectCenter(targetRect),
+        1,
+      );
+      targetPoint = getIntersectionPoint(targetRect, sourceRect);
+    } else {
+      const towardFirst = displayWaypoints[0]!;
+      sourcePoint = nudgePointTowards(boundaryExitToward(sourceRect, towardFirst), towardFirst, 1);
+
+      const approachLast = displayWaypoints[displayWaypoints.length - 1]!;
+      targetPoint = boundaryEntryFromApproach(targetRect, approachLast);
+    }
+
+    return { sourcePoint, targetPoint };
+  }, [displayWaypoints, sourceNode, targetNode]);
+
+  const vertexChain = useMemo(() => {
+    if (!geometry) return [];
+    return [geometry.sourcePoint, ...displayWaypoints, geometry.targetPoint];
+  }, [geometry, displayWaypoints]);
+
+  const curve = useMemo(() => {
+    if (vertexChain.length < 2) return null;
+    return roundedPolylinePath(vertexChain, EDGE_CORNER_RADIUS);
+  }, [vertexChain]);
+
+  const stopDragListeners = useCallback(() => {
+    dragCleanupRef.current?.();
+    dragCleanupRef.current = null;
+  }, []);
+
+  const finishWaypointDrag = useCallback(() => {
+    const final = dragDraftRef.current;
+    dragDraftRef.current = null;
+    stopDragListeners();
+    setDragWaypoints(null);
+    if (final && waypointActions) {
+      waypointActions.updateWaypoints(id, final);
+    }
+  }, [id, stopDragListeners, waypointActions]);
+
+  const beginWaypointDrag = useCallback(
+    (setupDraft: () => EdgeWaypoint[], dragIndex: number) => (event: ReactPointerEvent<SVGElement>) => {
+      const wa = waypointActions;
+      if (!wa?.isEditor) return;
+      event.stopPropagation();
+      event.preventDefault();
+
+      const draft = setupDraft();
+      const snapWp = wa.gridSnapEnabled && !event.shiftKey;
+      if (snapWp && draft[dragIndex]) {
+        draft[dragIndex] = snapFlowTopLeftToGrid(draft[dragIndex]!);
+      }
+      dragDraftRef.current = draft;
+      setDragWaypoints(draft);
+
+      const onMove = (ev: PointerEvent) => {
+        let p = reactFlow.screenToFlowPosition({ x: ev.clientX, y: ev.clientY });
+        if (wa.gridSnapEnabled && !ev.shiftKey) {
+          p = snapFlowTopLeftToGrid(p);
+        }
+        const base = dragDraftRef.current ?? draft;
+        const next = [...base];
+        next[dragIndex] = p;
+        dragDraftRef.current = next;
+        setDragWaypoints(next);
+      };
+
+      const onUp = () => {
+        finishWaypointDrag();
+      };
+
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+      dragCleanupRef.current = () => {
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+      };
+    },
+    [finishWaypointDrag, reactFlow, waypointActions],
+  );
+
+  const removeWaypointAtIndex = useCallback(
+    (index: number) => {
+      if (!waypointActions?.isEditor) return;
+      stopDragListeners();
+      const base = dragDraftRef.current ?? committedWaypoints;
+      dragDraftRef.current = null;
+      setDragWaypoints(null);
+      if (index < 0 || index >= base.length) return;
+      const next = base.filter((_, i) => i !== index);
+      waypointActions.updateWaypoints(id, next);
+    },
+    [committedWaypoints, id, stopDragListeners, waypointActions],
+  );
+
+  const showWaypointHandles = Boolean(selected && waypointActions?.isEditor && geometry);
+
+  const segmentMidHandles = useMemo(() => {
+    if (!showWaypointHandles || vertexChain.length < 2) return [];
+    const handles: { key: string; cx: number; cy: number; segmentIndex: number }[] = [];
+    for (let i = 0; i < vertexChain.length - 1; i++) {
+      const a = vertexChain[i]!;
+      const b = vertexChain[i + 1]!;
+      const dist = Math.hypot(b.x - a.x, b.y - a.y);
+      const allowMid =
+        displayWaypoints.length === 0 ? i === 0 : dist >= EDGE_MIN_SEGMENT_FOR_MID_HANDLE;
+      if (!allowMid) continue;
+      handles.push({
+        key: `mid-${i}`,
+        cx: (a.x + b.x) / 2,
+        cy: (a.y + b.y) / 2,
+        segmentIndex: i,
+      });
+    }
+    return handles;
+  }, [displayWaypoints.length, showWaypointHandles, vertexChain]);
+
+  if (!geometry || !curve) return null;
+
+  const { sourcePoint, targetPoint } = geometry;
+  const edgePath = curve.d;
+  const arrowPath =
+    curve.endTangent != null
+      ? getArrowHeadPath(targetPoint, curve.endTangent)
+      : getStraightArrowHeadPath(sourcePoint, targetPoint);
+
+  const strokeW = selected ? EDGE_WIDTH * 1.85 : EDGE_WIDTH;
+  const strokeColor = selected ? "rgba(228,212,182,.72)" : EDGE_STROKE;
 
   return (
     <g data-id={id}>
@@ -297,7 +658,7 @@ function BoundaryStraightEdge({ id, source, target, style }: EdgeProps) {
         strokeWidth={EDGE_HIT_WIDTH}
         pointerEvents="stroke"
       />
-      <path d={edgePath} fill="none" stroke={EDGE_STROKE} strokeWidth={EDGE_WIDTH} style={style} />
+      <path d={edgePath} fill="none" stroke={strokeColor} strokeWidth={strokeW} style={style} />
       <path
         d={arrowPath}
         fill="rgba(0,0,0,0.001)"
@@ -305,7 +666,65 @@ function BoundaryStraightEdge({ id, source, target, style }: EdgeProps) {
         strokeWidth={4}
         pointerEvents="all"
       />
-      <path d={arrowPath} fill={EDGE_STROKE} />
+      <path d={arrowPath} fill={strokeColor} />
+
+      {showWaypointHandles
+        ? displayWaypoints.map((wp, index) => (
+            <circle
+              key={`wp-${index}`}
+              className="nopan nodrag"
+              cx={wp.x}
+              cy={wp.y}
+              r={EDGE_HANDLE_RADIUS}
+              fill="#D39A43"
+              stroke="rgba(242,238,230,.85)"
+              strokeWidth={1}
+              style={{ cursor: "grab", pointerEvents: "all" }}
+              onPointerDown={beginWaypointDrag(() => [...committedWaypoints], index)}
+              onDoubleClick={(event: ReactMouseEvent<SVGCircleElement>) => {
+                event.preventDefault();
+                event.stopPropagation();
+                removeWaypointAtIndex(index);
+              }}
+              onContextMenu={(event: ReactMouseEvent<SVGCircleElement>) => {
+                event.preventDefault();
+                event.stopPropagation();
+                removeWaypointAtIndex(index);
+              }}
+            >
+              <title>Перетащить · двойной клик или ПКМ — удалить точку</title>
+            </circle>
+          ))
+        : null}
+
+      {showWaypointHandles
+        ? segmentMidHandles.map((h) => (
+            <circle
+              key={h.key}
+              className="nopan nodrag"
+              cx={h.cx}
+              cy={h.cy}
+              r={EDGE_MID_HANDLE_RADIUS}
+              fill="rgba(211,154,67,.28)"
+              stroke="rgba(211,154,67,.65)"
+              strokeWidth={1}
+              strokeDasharray="3 3"
+              style={{ cursor: "crosshair", pointerEvents: "all" }}
+              onPointerDown={beginWaypointDrag(() => {
+                const verts = [sourcePoint, ...committedWaypoints, targetPoint];
+                const mid = {
+                  x: (verts[h.segmentIndex]!.x + verts[h.segmentIndex + 1]!.x) / 2,
+                  y: (verts[h.segmentIndex]!.y + verts[h.segmentIndex + 1]!.y) / 2,
+                };
+                return [
+                  ...committedWaypoints.slice(0, h.segmentIndex),
+                  mid,
+                  ...committedWaypoints.slice(h.segmentIndex),
+                ];
+              }, h.segmentIndex)}
+            />
+          ))
+        : null}
     </g>
   );
 }
@@ -352,7 +771,7 @@ function BoundaryConnectionLine({
     ? getIntersectionPoint(targetRect, sourceRect ?? { centerX: fromX, centerY: fromY, halfW: 1, halfH: 1 })
     : { x: toX, y: toY };
 
-  const arrowPath = getArrowPath(sourceAnchor, targetAnchor);
+  const arrowPath = getStraightArrowHeadPath(sourceAnchor, targetAnchor);
 
   return (
     <g>
@@ -536,12 +955,14 @@ function toFlowNode(goal: ApiGoal): Node<GoalNodeData> {
   };
 }
 
-function toFlowEdge(edge: ApiEdge): Edge {
+function toFlowEdge(edge: ApiEdge, selectable = true): Edge {
   return {
     id: edge.id,
     source: edge.sourceId,
     target: edge.targetId,
     type: "boundaryStraight",
+    data: { waypoints: normalizeEdgeWaypointsArray(edge.waypoints) },
+    selectable,
   };
 }
 
@@ -581,7 +1002,7 @@ function spreadOverlappingNodes(nodes: Node<GoalNodeData>[]): Node<GoalNodeData>
 }
 
 function buildFlowNodes(goals: ApiGoal[], edges: ApiEdge[]) {
-  const flowEdges = edges.map(toFlowEdge);
+  const flowEdges = edges.map((edge) => toFlowEdge(edge));
   const baseNodes = spreadOverlappingNodes(goals.map(toFlowNode));
   return applyComputedStates(baseNodes, flowEdges);
 }
@@ -710,13 +1131,18 @@ function GoalGraphClientInner({
   initialGraph,
   initialNext,
 }: GoalGraphClientInnerProps) {
+  const isEditor =
+    !isPublicView && (currentBoardRole === "OWNER" || currentBoardRole === "EDITOR");
+
   const reactFlow = useReactFlow<Node<GoalNodeData>, Edge>();
   const flowSectionRef = useRef<HTMLElement | null>(null);
   const [nodes, setNodes] = useState<Node<GoalNodeData>[]>(() =>
     buildFlowNodes(initialGraph.goals, initialGraph.edges),
   );
   const nodesRef = useRef(nodes);
-  const [edges, setEdges] = useState<Edge[]>(() => initialGraph.edges.map(toFlowEdge));
+  const [edges, setEdges] = useState<Edge[]>(() =>
+    initialGraph.edges.map((edge) => toFlowEdge(edge, isEditor)),
+  );
   const [nextGoals, setNextGoals] = useState<NextGoalItem[]>(initialNext);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -756,6 +1182,39 @@ function GoalGraphClientInner({
   const flowContextMenuRef = useRef<HTMLDivElement | null>(null);
   const prevLeftSidebarOpenRef = useRef(leftSidebarOpen);
   const [gridSnapEnabled, setGridSnapEnabled] = useState(false);
+  /** Зажатый Shift временно отключает привязку к сетке при перетаскивании узлов и точек связи. */
+  const [shiftHeldForSnapBypass, setShiftHeldForSnapBypass] = useState(false);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Shift") {
+        setShiftHeldForSnapBypass(true);
+      }
+    };
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (event.key === "Shift") {
+        setShiftHeldForSnapBypass(false);
+      }
+    };
+    const resetShift = () => setShiftHeldForSnapBypass(false);
+
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", resetShift);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        resetShift();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", resetShift);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, []);
 
   useLayoutEffect(() => {
     const prev = prevLeftSidebarOpenRef.current;
@@ -886,7 +1345,6 @@ function GoalGraphClientInner({
     };
   }, [openDetailDropdown]);
 
-  const isEditor = !isPublicView && (currentBoardRole === "OWNER" || currentBoardRole === "EDITOR");
   const canManageShare = !isPublicView && currentBoardRole === "OWNER";
   const publicUrl = publicShareToken ? `/share/${publicShareToken}` : null;
 
@@ -1000,7 +1458,7 @@ function GoalGraphClientInner({
     try {
       const response = await fetch(withBoard("/api/graph"));
       const data = await parseJson<GraphResponse>(response);
-      const nextEdges = data.edges.map(toFlowEdge);
+      const nextEdges = data.edges.map((edge) => toFlowEdge(edge, isEditor));
       setNodes(buildFlowNodes(data.goals, data.edges));
       setEdges(nextEdges);
     } catch (loadError) {
@@ -1008,7 +1466,7 @@ function GoalGraphClientInner({
     } finally {
       setIsLoading(false);
     }
-  }, [withBoard]);
+  }, [isEditor, withBoard]);
 
   const loadNext = useCallback(async () => {
     try {
@@ -1173,7 +1631,7 @@ function GoalGraphClientInner({
       });
       const edge = await parseJson<ApiEdge>(response);
       setEdges((prev) => {
-        const nextEdges = addEdge(toFlowEdge(edge), prev);
+        const nextEdges = addEdge(toFlowEdge(edge, isEditor), prev);
         setNodes((currentNodes) => applyComputedStates(currentNodes, nextEdges));
         return nextEdges;
       });
@@ -1310,6 +1768,43 @@ function GoalGraphClientInner({
       setError(deleteError instanceof Error ? deleteError.message : "Failed to delete edge");
     }
   }, [isEditor, loadNext, withBoard]);
+
+  const updateEdgeWaypoints = useCallback(
+    async (edgeId: string, waypoints: EdgeWaypoint[]) => {
+      setEdges((prev) =>
+        prev.map((edge) =>
+          edge.id === edgeId ? { ...edge, data: { ...(edge.data ?? {}), waypoints } } : edge,
+        ),
+      );
+
+      if (!isEditor) return;
+
+      setError(null);
+      try {
+        const response = await fetch(withBoard(`/api/edges/${edgeId}`), {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ waypoints }),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error((payload as { error?: string }).error ?? "Не удалось сохранить траекторию связи");
+        }
+      } catch (waypointError) {
+        setError(waypointError instanceof Error ? waypointError.message : "Не удалось сохранить траекторию связи");
+      }
+    },
+    [isEditor, withBoard],
+  );
+
+  const edgeWaypointActionsValue = useMemo(
+    () => ({
+      isEditor,
+      updateWaypoints: updateEdgeWaypoints,
+      gridSnapEnabled: Boolean(isEditor && gridSnapEnabled),
+    }),
+    [gridSnapEnabled, isEditor, updateEdgeWaypoints],
+  );
 
   const selectedBlockedBy = useMemo(() => {
     if (!selectedGoalNode) return [];
@@ -1976,6 +2471,7 @@ function GoalGraphClientInner({
             </div>
           ) : null}
 
+          <EdgeWaypointActionsContext.Provider value={edgeWaypointActionsValue}>
           <ReactFlow
             className="h-full"
             nodeTypes={nodeTypes}
@@ -2003,10 +2499,12 @@ function GoalGraphClientInner({
             defaultEdgeOptions={{
               type: "boundaryStraight",
               style: { stroke: EDGE_STROKE, strokeWidth: EDGE_WIDTH },
+              data: { waypoints: [] },
+              selectable: isEditor,
             }}
             nodesDraggable={isEditor}
             nodesConnectable={isEditor}
-            snapToGrid={isEditor && gridSnapEnabled}
+            snapToGrid={isEditor && gridSnapEnabled && !shiftHeldForSnapBypass}
             snapGrid={[BACKGROUND_GRID_GAP, BACKGROUND_GRID_GAP]}
             fitView
           >
@@ -2038,7 +2536,7 @@ function GoalGraphClientInner({
                   onClick={() => setGridSnapEnabled((previous) => !previous)}
                   title={
                     gridSnapEnabled
-                      ? "Отключить прилипание к точкам сетки"
+                      ? "Отключить прилипание к точкам сетки (Shift при перетаскивании — без привязки)"
                       : "Прилипание к точкам сетки при перетаскивании"
                   }
                   aria-label={
@@ -2056,6 +2554,7 @@ function GoalGraphClientInner({
               ) : null}
             </Controls>
           </ReactFlow>
+          </EdgeWaypointActionsContext.Provider>
           {isLoading ? (
             <div className="absolute bottom-4 left-4 z-10 text-xs text-[#8A857B]">Загрузка...</div>
           ) : null}
@@ -2337,7 +2836,8 @@ function GoalGraphClientInner({
             </div>
           ) : (
             <div className="rounded-xl border border-white/10 bg-[#1D201E] p-4 text-sm text-[#B8B0A3]">
-              Выберите цель на графе, чтобы открыть детали. Двойной клик по связи удаляет зависимость.
+              Выберите цель на графе, чтобы открыть детали. Клик по связи — точки траектории;
+              по точке — двойной клик или ПКМ удаляют её; двойной клик по самой связи удаляет зависимость.
             </div>
           )}
             </div>
