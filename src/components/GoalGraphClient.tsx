@@ -45,12 +45,14 @@ type GoalNodeData = {
   priority: number;
   type: GoalType;
   computedState: ComputedState;
+  isConnecting: boolean;
 };
 
 const DEFAULT_NODE_WIDTH = 256;
 const DEFAULT_NODE_HEIGHT = 96;
 const EDGE_STROKE = "rgba(216,200,168,.42)";
 const EDGE_WIDTH = 1.2;
+const EDGE_HIT_WIDTH = EDGE_WIDTH + 4;
 const EDGE_ARROW_LENGTH = 12;
 const EDGE_ARROW_HALF_WIDTH = 4;
 
@@ -228,7 +230,21 @@ function BoundaryStraightEdge({ id, source, target, style }: EdgeProps) {
 
   return (
     <g data-id={id}>
+      <path
+        d={edgePath}
+        fill="none"
+        stroke="rgba(0,0,0,0.001)"
+        strokeWidth={EDGE_HIT_WIDTH}
+        pointerEvents="stroke"
+      />
       <path d={edgePath} fill="none" stroke={EDGE_STROKE} strokeWidth={EDGE_WIDTH} style={style} />
+      <path
+        d={arrowPath}
+        fill="rgba(0,0,0,0.001)"
+        stroke="rgba(0,0,0,0.001)"
+        strokeWidth={4}
+        pointerEvents="all"
+      />
       <path d={arrowPath} fill={EDGE_STROKE} />
     </g>
   );
@@ -294,6 +310,7 @@ function BoundaryConnectionLine({
 function GoalNode({ data, selected }: NodeProps<Node<GoalNodeData>>) {
   const tone = stateTone[data.computedState];
   const isDimmed = data.computedState === "LOCKED" || data.computedState === "BLOCKED";
+  const canDropNow = data.isConnecting;
   const targetHandleStyle = {
     left: "-3px",
     top: "-3px",
@@ -304,8 +321,8 @@ function GoalNode({ data, selected }: NodeProps<Node<GoalNodeData>>) {
     background: "transparent",
     border: "none",
     opacity: 0,
-    zIndex: 30,
-    pointerEvents: "all" as const,
+    zIndex: canDropNow ? 35 : 0,
+    pointerEvents: canDropNow ? ("all" as const) : ("none" as const),
   };
   const sourceHandleBaseStyle = {
     transform: "none",
@@ -314,7 +331,7 @@ function GoalNode({ data, selected }: NodeProps<Node<GoalNodeData>>) {
     border: "none",
     opacity: 0,
     zIndex: 40,
-    pointerEvents: "all" as const,
+    pointerEvents: canDropNow ? ("none" as const) : ("all" as const),
   };
 
   return (
@@ -325,11 +342,19 @@ function GoalNode({ data, selected }: NodeProps<Node<GoalNodeData>>) {
         selected ? "ring-1 ring-[#D39A43] shadow-[0_0_0_1px_rgba(211,154,67,.7),0_0_28px_rgba(211,154,67,.16)]" : ""
       }`}
     >
-      <Handle type="target" position={Position.Left} style={targetHandleStyle} />
+      <Handle
+        type="target"
+        position={Position.Left}
+        style={targetHandleStyle}
+        isConnectableStart={false}
+        isConnectableEnd
+      />
       <Handle
         id="source-top"
         type="source"
         position={Position.Top}
+        isConnectableStart
+        isConnectableEnd={false}
         style={{
           ...sourceHandleBaseStyle,
           left: 0,
@@ -342,6 +367,8 @@ function GoalNode({ data, selected }: NodeProps<Node<GoalNodeData>>) {
         id="source-right"
         type="source"
         position={Position.Right}
+        isConnectableStart
+        isConnectableEnd={false}
         style={{
           ...sourceHandleBaseStyle,
           right: "-3px",
@@ -354,6 +381,8 @@ function GoalNode({ data, selected }: NodeProps<Node<GoalNodeData>>) {
         id="source-bottom"
         type="source"
         position={Position.Bottom}
+        isConnectableStart
+        isConnectableEnd={false}
         style={{
           ...sourceHandleBaseStyle,
           left: 0,
@@ -366,6 +395,8 @@ function GoalNode({ data, selected }: NodeProps<Node<GoalNodeData>>) {
         id="source-left"
         type="source"
         position={Position.Left}
+        isConnectableStart
+        isConnectableEnd={false}
         style={{
           ...sourceHandleBaseStyle,
           left: "-3px",
@@ -437,6 +468,7 @@ function toFlowNode(goal: ApiGoal): Node<GoalNodeData> {
       priority: goal.priority,
       type: goal.type,
       computedState: "AVAILABLE",
+      isConnecting: false,
     },
     draggable: true,
   };
@@ -515,6 +547,7 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
   const [error, setError] = useState<string | null>(null);
   const [selectedGoalId, setSelectedGoalId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [isConnecting, setIsConnecting] = useState(false);
 
   const selectedGoalNode = useMemo(
     () => nodes.find((node) => node.id === selectedGoalId) ?? null,
@@ -569,13 +602,15 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
   );
   const visibleNodes = useMemo(
     () =>
-      query.length === 0
-        ? nodes
-        : nodes.map((node) => ({
-            ...node,
-            hidden: !matchesSearch(node.data.title),
-          })),
-    [matchesSearch, nodes, query.length],
+      nodes.map((node) => ({
+        ...node,
+        hidden: query.length === 0 ? false : !matchesSearch(node.data.title),
+        data: {
+          ...node.data,
+          isConnecting,
+        },
+      })),
+    [isConnecting, matchesSearch, nodes, query.length],
   );
   const focusCount = activeGoals.length;
   const startableCount = availableGoals.length;
@@ -749,6 +784,14 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
       }
     }
   }, [loadNext]);
+
+  const onConnectStart = useCallback(() => {
+    setIsConnecting(true);
+  }, []);
+
+  const onConnectEnd = useCallback(() => {
+    setIsConnecting(false);
+  }, []);
 
   const onNodeClick = useCallback<NodeMouseHandler<Node<GoalNodeData>>>((_, node) => {
     setSelectedGoalId(node.id);
@@ -1013,6 +1056,8 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
             onNodeClick={onNodeClick}
             onNodeDragStop={onNodeDragStop}
             onConnect={onConnect}
+            onConnectStart={onConnectStart}
+            onConnectEnd={onConnectEnd}
             onEdgeDoubleClick={onEdgeDoubleClick}
             defaultEdgeOptions={{
               type: "boundaryStraight",
