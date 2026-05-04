@@ -12,7 +12,11 @@ const calendarDayString = z.union([
   z.null(),
 ]);
 
+/** Явный id (напр. при восстановлении из истории графа); должен быть свободен в таблице Goal. */
+export const optionalClientCuid = z.string().min(4).max(64).optional();
+
 export const createGoalSchema = z.object({
+  id: optionalClientCuid,
   title: goalTitleValue,
   description: z.string().max(5000).optional(),
   type: z.enum(["EPIC", "MILESTONE", "TASK", "HABIT"]).optional(),
@@ -22,19 +26,24 @@ export const createGoalSchema = z.object({
   startsOn: calendarDayString.optional(),
 });
 
-export const updateGoalSchema = createGoalSchema.partial().extend({
-  status: z.enum(["TODO", "ACTIVE", "DONE", "BLOCKED", "DROPPED"]).optional(),
-});
-
-export const createEdgeSchema = z.object({
-  sourceId: z.string().min(1),
-  targetId: z.string().min(1),
-  type: z.enum(["REQUIRES", "RELATED"]).optional(),
-});
+export const updateGoalSchema = createGoalSchema
+  .omit({ id: true })
+  .partial()
+  .extend({
+    status: z.enum(["TODO", "ACTIVE", "DONE", "BLOCKED", "DROPPED"]).optional(),
+  });
 
 const edgeWaypointSchema = z.object({
   x: z.number().finite(),
   y: z.number().finite(),
+});
+
+export const createEdgeSchema = z.object({
+  id: optionalClientCuid,
+  sourceId: z.string().min(1),
+  targetId: z.string().min(1),
+  type: z.enum(["REQUIRES", "RELATED"]).optional(),
+  waypoints: z.union([z.array(edgeWaypointSchema).max(64), z.null()]).optional(),
 });
 
 export const updateEdgeWaypointsSchema = z.object({

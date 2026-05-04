@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 
 import { boardRoleSatisfies, getBoardIdFromRequest, getUserBoardRole } from "@/server/board-access";
@@ -33,7 +34,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const { sourceId, targetId, type = "REQUIRES" } = parsed.data;
+  const { sourceId, targetId, type = "REQUIRES", id: clientEdgeId, waypoints } = parsed.data;
 
   if (sourceId === targetId) {
     return NextResponse.json({ error: "Self-edge is not allowed" }, { status: 400 });
@@ -71,10 +72,17 @@ export async function POST(request: Request) {
   try {
     const edge = await prisma.goalEdge.create({
       data: {
+        ...(clientEdgeId ? { id: clientEdgeId } : {}),
         boardId,
         sourceId,
         targetId,
         type,
+        ...(waypoints !== undefined
+          ? {
+              waypoints:
+                waypoints === null ? Prisma.DbNull : (waypoints as Prisma.InputJsonValue),
+            }
+          : {}),
       },
     });
 

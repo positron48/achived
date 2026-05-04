@@ -5,6 +5,8 @@ WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 
 COPY package.json package-lock.json ./
+# postinstall (prisma generate) needs schema до полного COPY .
+COPY prisma ./prisma
 RUN npm ci
 
 COPY . .

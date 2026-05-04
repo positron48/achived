@@ -40,6 +40,7 @@ import {
   useState,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
+  type SetStateAction,
 } from "react";
 
 import {
@@ -57,6 +58,16 @@ import {
   type NextGoalItem,
   normalizeGoalStartsOn,
 } from "@/lib/graph-types";
+import { applyGraphSnapshotToServer } from "@/lib/apply-graph-snapshot-to-server";
+import { logDevGraphHistoryDiff } from "@/lib/dev-graph-snapshot-diff";
+import { snapshotsSemanticallyEqual } from "@/lib/graph-snapshot-semantic";
+import {
+  GRAPH_HISTORY_MAX_ENTRIES,
+  deserializeGraphSnapshot,
+  readPersistedGraphHistory,
+  serializeGraphSnapshot,
+  writePersistedGraphHistory,
+} from "@/lib/graph-history";
 import type { UserUiSettings } from "@/lib/user-ui-settings";
 import { isBeforeStartCalendarDay } from "@/lib/schedule";
 
@@ -1018,12 +1029,16 @@ function toFlowNode(goal: ApiGoal): Node<GoalNodeData> {
 }
 
 function toFlowEdge(edge: ApiEdge, selectable = true): Edge {
+  const waypoints = normalizeEdgeWaypointsArray(edge.waypoints);
   return {
     id: edge.id,
     source: edge.sourceId,
     target: edge.targetId,
     type: "boundaryStraight",
-    data: { waypoints: normalizeEdgeWaypointsArray(edge.waypoints) },
+    data: {
+      ...(waypoints.length > 0 ? { waypoints } : {}),
+      linkType: edge.type,
+    },
     selectable,
   };
 }
@@ -1225,6 +1240,12 @@ function GoalGraphClientInner({
   useEffect(() => {
     edgesRef.current = edges;
   }, [edges]);
+
+  const skipGraphHistoryRef = useRef(false);
+  const graphHistoryRef = useRef<{ entries: string[]; index: number }>({ entries: [], index: 0 });
+  const [historyNav, setHistoryNav] = useState({ index: 0, entryCount: 1 });
+  const [isHistorySyncing, setIsHistorySyncing] = useState(false);
+
   /** Перетаскивание группы узлов: эталонные точки траектории для рёбер между двумя выбранными узлами. */
   const nodeDragWaypointsRef = useRef<{
     anchorStart: { x: number; y: number };
@@ -1233,7 +1254,7 @@ function GoalGraphClientInner({
   const [nextGoals, setNextGoals] = useState<NextGoalItem[]>(initialNext);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [selectedGoalId, setSelectedGoalId] = useState<string | null>(null);
+  const [selectedGoalId, setSelectedGoalIdState] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [isConnecting, setIsConnecting] = useState(false);
   const [boardMembers, setBoardMembers] = useState<BoardMemberItem[]>([]);
@@ -1254,10 +1275,16 @@ function GoalGraphClientInner({
   } | null>(null);
   const [editingCardTitle, setEditingCardTitle] = useState(false);
   const cardTitleInputRef = useRef<HTMLInputElement | null>(null);
+
+  const setSelectedGoalId = useCallback((action: SetStateAction<string | null>) => {
+    setEditingCardTitle(false);
+    setSelectedGoalIdState(action);
+  }, []);
+
   const selectGoalId = useCallback((goalId: string | null) => {
     setOpenDetailDropdown(null);
     setSelectedGoalId(goalId);
-  }, []);
+  }, [setSelectedGoalId]);
 
   useLayoutEffect(() => {
     if (!editingCardTitle) return;
@@ -1266,10 +1293,6 @@ function GoalGraphClientInner({
     el.focus();
     el.select();
   }, [editingCardTitle]);
-
-  useEffect(() => {
-    setEditingCardTitle(false);
-  }, [selectedGoalId]);
 
   const detailDropdownTriggersRef = useRef<HTMLDivElement | null>(null);
   const detailDropdownMenuRef = useRef<HTMLDivElement | null>(null);
@@ -1459,10 +1482,82 @@ function GoalGraphClientInner({
     [currentBoardId, isPublicView],
   );
 
+  const syncHistoryNavFromRef = useCallback(() => {
+    const h = graphHistoryRef.current;
+    setHistoryNav({
+      index: h.index,
+      entryCount: Math.max(1, h.entries.length),
+    });
+  }, []);
+
+  const commitGraphHistory = useCallback(
+    (nextNodes: Node<GoalNodeData>[], nextEdges: Edge[]) => {
+      if (!isEditor || isPublicView) return;
+      if (skipGraphHistoryRef.current) return;
+      const snap = serializeGraphSnapshot(nextNodes, nextEdges);
+      const h = graphHistoryRef.current;
+      const tip = h.entries[h.index];
+      if (tip !== undefined && snapshotsSemanticallyEqual(tip, snap)) {
+        return;
+      }
+      const nextEntries = h.entries.slice(0, h.index + 1);
+      nextEntries.push(snap);
+      while (nextEntries.length > GRAPH_HISTORY_MAX_ENTRIES) {
+        nextEntries.shift();
+      }
+      const index = nextEntries.length - 1;
+      graphHistoryRef.current = { entries: nextEntries, index };
+      writePersistedGraphHistory(currentBoardId, nextEntries, index);
+      syncHistoryNavFromRef();
+    },
+    [currentBoardId, isEditor, isPublicView, syncHistoryNavFromRef],
+  );
+
+  const resetGraphHistoryFromSnapshot = useCallback(
+    (nextNodes: Node<GoalNodeData>[], nextEdges: Edge[]) => {
+      if (!isEditor || isPublicView) return;
+      const snap = serializeGraphSnapshot(nextNodes, nextEdges);
+      graphHistoryRef.current = { entries: [snap], index: 0 };
+      writePersistedGraphHistory(currentBoardId, [snap], 0);
+      syncHistoryNavFromRef();
+    },
+    [currentBoardId, isEditor, isPublicView, syncHistoryNavFromRef],
+  );
+
+  useLayoutEffect(() => {
+    if (!isEditor || isPublicView) return;
+    const n0 = buildFlowNodes(initialGraph.goals, initialGraph.edges);
+    const e0 = initialGraph.edges.map((edge) => toFlowEdge(edge, isEditor));
+    const initialSnap = serializeGraphSnapshot(n0, e0);
+    const persisted = readPersistedGraphHistory(currentBoardId);
+    if (
+      persisted &&
+      persisted.entries.length > 0 &&
+      persisted.entries[0] === initialSnap &&
+      persisted.index < persisted.entries.length
+    ) {
+      graphHistoryRef.current = {
+        entries: persisted.entries,
+        index: Math.min(persisted.index, persisted.entries.length - 1),
+      };
+    } else {
+      graphHistoryRef.current = { entries: [initialSnap], index: 0 };
+      writePersistedGraphHistory(currentBoardId, [initialSnap], 0);
+    }
+    queueMicrotask(() => {
+      syncHistoryNavFromRef();
+    });
+    // initialGraph — только начальная загрузка для этой доски (при смене boardId).
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- см. выше
+  }, [currentBoardId, isEditor, isPublicView, syncHistoryNavFromRef]);
+
   const selectedGoalNode = useMemo(
     () => nodes.find((node) => node.id === selectedGoalId) ?? null,
     [nodes, selectedGoalId],
   );
+
+  const canUndoGraph = historyNav.index > 0 && !isHistorySyncing;
+  const canRedoGraph = historyNav.index < historyNav.entryCount - 1 && !isHistorySyncing;
 
   const goalTextSyncedRef = useRef<{ id: string; title: string; description: string } | null>(null);
   const nodeTypes = useMemo(() => ({ goalNode: GoalNode }), []);
@@ -1567,14 +1662,16 @@ function GoalGraphClientInner({
       const response = await fetch(withBoard("/api/graph"));
       const data = await parseJson<GraphResponse>(response);
       const nextEdges = data.edges.map((edge) => toFlowEdge(edge, isEditor));
-      setNodes(buildFlowNodes(data.goals, data.edges));
+      const nextNodes = buildFlowNodes(data.goals, data.edges);
+      setNodes(nextNodes);
       setEdges(nextEdges);
+      resetGraphHistoryFromSnapshot(nextNodes, nextEdges);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Failed to load graph");
     } finally {
       setIsLoading(false);
     }
-  }, [isEditor, withBoard]);
+  }, [isEditor, resetGraphHistoryFromSnapshot, withBoard]);
 
   const loadNext = useCallback(async () => {
     try {
@@ -1585,6 +1682,139 @@ function GoalGraphClientInner({
       setError(nextError instanceof Error ? nextError.message : "Failed to load next goals");
     }
   }, [withBoard]);
+
+  const undoGraph = useCallback(async () => {
+    if (!isEditor || isPublicView || isHistorySyncing) return;
+    const h = graphHistoryRef.current;
+    if (h.index <= 0) return;
+    const newIndex = h.index - 1;
+    const raw = h.entries[newIndex]!;
+
+    setIsHistorySyncing(true);
+    setError(null);
+    try {
+      logDevGraphHistoryDiff(h.entries[h.index]!, raw, "undo");
+      await applyGraphSnapshotToServer({
+        targetSnapshotJson: raw,
+        currentNodes: nodesRef.current,
+        currentEdges: edgesRef.current,
+        withBoard,
+      });
+      const parsed = deserializeGraphSnapshot(raw, isEditor);
+      if (!parsed) {
+        throw new Error("Некорректный снимок графа");
+      }
+      skipGraphHistoryRef.current = true;
+      setNodes(applyComputedStates(parsed.nodes as Node<GoalNodeData>[], parsed.edges));
+      setEdges(parsed.edges);
+      graphHistoryRef.current = { ...h, index: newIndex };
+      writePersistedGraphHistory(currentBoardId, h.entries, newIndex);
+      skipGraphHistoryRef.current = false;
+      setSelectedGoalId((sel) =>
+        sel && (parsed.nodes as Node<GoalNodeData>[]).some((n) => n.id === sel) ? sel : null,
+      );
+      syncHistoryNavFromRef();
+      void loadNext();
+    } catch (syncError) {
+      setError(syncError instanceof Error ? syncError.message : "Не удалось откатить граф");
+      await loadGraph();
+    } finally {
+      setIsHistorySyncing(false);
+    }
+  }, [
+    currentBoardId,
+    isEditor,
+    isHistorySyncing,
+    isPublicView,
+    loadGraph,
+    loadNext,
+    setSelectedGoalId,
+    syncHistoryNavFromRef,
+    withBoard,
+  ]);
+
+  const redoGraph = useCallback(async () => {
+    if (!isEditor || isPublicView || isHistorySyncing) return;
+    const h = graphHistoryRef.current;
+    if (h.index >= h.entries.length - 1) return;
+    const newIndex = h.index + 1;
+    const raw = h.entries[newIndex]!;
+
+    setIsHistorySyncing(true);
+    setError(null);
+    try {
+      logDevGraphHistoryDiff(h.entries[h.index]!, raw, "redo");
+      await applyGraphSnapshotToServer({
+        targetSnapshotJson: raw,
+        currentNodes: nodesRef.current,
+        currentEdges: edgesRef.current,
+        withBoard,
+      });
+      const parsed = deserializeGraphSnapshot(raw, isEditor);
+      if (!parsed) {
+        throw new Error("Некорректный снимок графа");
+      }
+      skipGraphHistoryRef.current = true;
+      setNodes(applyComputedStates(parsed.nodes as Node<GoalNodeData>[], parsed.edges));
+      setEdges(parsed.edges);
+      graphHistoryRef.current = { ...h, index: newIndex };
+      writePersistedGraphHistory(currentBoardId, h.entries, newIndex);
+      skipGraphHistoryRef.current = false;
+      setSelectedGoalId((sel) =>
+        sel && (parsed.nodes as Node<GoalNodeData>[]).some((n) => n.id === sel) ? sel : null,
+      );
+      syncHistoryNavFromRef();
+      void loadNext();
+    } catch (syncError) {
+      setError(syncError instanceof Error ? syncError.message : "Не удалось повторить шаг");
+      await loadGraph();
+    } finally {
+      setIsHistorySyncing(false);
+    }
+  }, [
+    currentBoardId,
+    isEditor,
+    isHistorySyncing,
+    isPublicView,
+    loadGraph,
+    loadNext,
+    setSelectedGoalId,
+    syncHistoryNavFromRef,
+    withBoard,
+  ]);
+
+  useEffect(() => {
+    if (!isEditor || isPublicView) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.tagName === "SELECT" ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      const mod = event.metaKey || event.ctrlKey;
+      if (!mod) return;
+      if (event.key === "z" || event.key === "Z") {
+        if (event.shiftKey) {
+          event.preventDefault();
+          void redoGraph();
+        } else {
+          event.preventDefault();
+          void undoGraph();
+        }
+      }
+      if (event.key === "y" && event.ctrlKey) {
+        event.preventDefault();
+        void redoGraph();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [isEditor, isPublicView, redoGraph, undoGraph]);
 
   const createGoalWithPosition = useCallback(
     async (x: number, y: number) => {
@@ -1610,13 +1840,19 @@ function GoalGraphClientInner({
           }),
         });
         const goal = await parseJson<ApiGoal>(response);
-        setNodes((prev) => applyComputedStates([...prev, toFlowNode(goal)], edges));
+        setNodes((prev) => {
+          const nextNodes = applyComputedStates([...prev, toFlowNode(goal)], edgesRef.current);
+          if (!skipGraphHistoryRef.current) {
+            commitGraphHistory(nextNodes, edgesRef.current);
+          }
+          return nextNodes;
+        });
         void loadNext();
       } catch (createError) {
         setError(createError instanceof Error ? createError.message : "Failed to create goal");
       }
     },
-    [edges, isEditor, loadNext, withBoard],
+    [commitGraphHistory, isEditor, loadNext, withBoard],
   );
 
   const createGoal = useCallback(() => {
@@ -1630,11 +1866,14 @@ function GoalGraphClientInner({
       patch: Partial<
         Pick<ApiGoal, "title" | "description" | "status" | "priority" | "type" | "x" | "y" | "startsOn">
       >,
+      options?: { recordHistory?: boolean },
     ) => {
       if (!isEditor) {
         setError("У вас только read-only доступ к этой доске.");
         return;
       }
+
+      const recordHistory = options?.recordHistory !== false;
 
       setError(null);
 
@@ -1646,8 +1885,8 @@ function GoalGraphClientInner({
         });
 
         const updated = await parseJson<ApiGoal>(response);
-        setNodes((prev) =>
-          applyComputedStates(
+        setNodes((prev) => {
+          const nextNodes = applyComputedStates(
             prev.map((node) =>
               node.id === updated.id
                 ? {
@@ -1665,15 +1904,19 @@ function GoalGraphClientInner({
                   }
                 : node,
             ),
-            edges,
-          ),
-        );
+            edgesRef.current,
+          );
+          if (recordHistory && !skipGraphHistoryRef.current) {
+            commitGraphHistory(nextNodes, edgesRef.current);
+          }
+          return nextNodes;
+        });
         void loadNext();
       } catch (updateError) {
         setError(updateError instanceof Error ? updateError.message : "Failed to update goal");
       }
     },
-    [edges, isEditor, loadNext, withBoard],
+    [commitGraphHistory, isEditor, loadNext, withBoard],
   );
 
   const updateGoalRef = useRef(updateGoal);
@@ -1697,8 +1940,15 @@ function GoalGraphClientInner({
         if (!response.ok) {
           throw new Error("Failed to delete goal");
         }
-        setNodes((prev) => prev.filter((node) => node.id !== goalId));
-        setEdges((prev) => prev.filter((edge) => edge.source !== goalId && edge.target !== goalId));
+        const nextNodes = nodesRef.current.filter((node) => node.id !== goalId);
+        const nextEdges = edgesRef.current.filter(
+          (edge) => edge.source !== goalId && edge.target !== goalId,
+        );
+        setNodes(nextNodes);
+        setEdges(nextEdges);
+        if (!skipGraphHistoryRef.current) {
+          commitGraphHistory(nextNodes, nextEdges);
+        }
         setOpenDetailDropdown(null);
         setSelectedGoalId((prev) => (prev === goalId ? null : prev));
         void loadNext();
@@ -1706,7 +1956,7 @@ function GoalGraphClientInner({
         setError(deleteError instanceof Error ? deleteError.message : "Failed to delete goal");
       }
     },
-    [isEditor, loadNext, withBoard],
+    [commitGraphHistory, isEditor, loadNext, setSelectedGoalId, withBoard],
   );
 
   const deleteGoal = useCallback(async () => {
@@ -1741,11 +1991,13 @@ function GoalGraphClientInner({
         }),
       });
       const edge = await parseJson<ApiEdge>(response);
-      setEdges((prev) => {
-        const nextEdges = addEdge(toFlowEdge(edge, isEditor), prev);
-        setNodes((currentNodes) => applyComputedStates(currentNodes, nextEdges));
-        return nextEdges;
-      });
+      const nextEdges = addEdge(toFlowEdge(edge, isEditor), edgesRef.current);
+      const nextNodes = applyComputedStates(nodesRef.current, nextEdges);
+      setEdges(nextEdges);
+      setNodes(nextNodes);
+      if (!skipGraphHistoryRef.current) {
+        commitGraphHistory(nextNodes, nextEdges);
+      }
       void loadNext();
     } catch (connectError) {
       if (connectError instanceof Error) {
@@ -1754,7 +2006,7 @@ function GoalGraphClientInner({
         setError("Не удалось создать связь.");
       }
     }
-  }, [isEditor, loadNext, withBoard]);
+  }, [commitGraphHistory, isEditor, loadNext, withBoard]);
 
   const onConnectStart = useCallback(() => {
     setIsConnecting(true);
@@ -1853,16 +2105,18 @@ function GoalGraphClientInner({
       if (!response.ok) {
         throw new Error("Failed to delete edge");
       }
-      setEdges((prev) => {
-        const nextEdges = prev.filter((existing) => existing.id !== edge.id);
-        setNodes((currentNodes) => applyComputedStates(currentNodes, nextEdges));
-        return nextEdges;
-      });
+      const nextEdges = edgesRef.current.filter((existing) => existing.id !== edge.id);
+      const nextNodes = applyComputedStates(nodesRef.current, nextEdges);
+      setEdges(nextEdges);
+      setNodes(nextNodes);
+      if (!skipGraphHistoryRef.current) {
+        commitGraphHistory(nextNodes, nextEdges);
+      }
       void loadNext();
     } catch (deleteError) {
       setError(deleteError instanceof Error ? deleteError.message : "Failed to delete edge");
     }
-  }, [isEditor, loadNext, withBoard]);
+  }, [commitGraphHistory, isEditor, loadNext, withBoard]);
 
   const updateEdgeWaypoints = useCallback(
     async (edgeId: string, waypoints: EdgeWaypoint[]) => {
@@ -1885,11 +2139,14 @@ function GoalGraphClientInner({
         if (!response.ok) {
           throw new Error((payload as { error?: string }).error ?? "Не удалось сохранить траекторию связи");
         }
+        if (!skipGraphHistoryRef.current) {
+          commitGraphHistory(nodesRef.current, edgesRef.current);
+        }
       } catch (waypointError) {
         setError(waypointError instanceof Error ? waypointError.message : "Не удалось сохранить траекторию связи");
       }
     },
-    [isEditor, withBoard],
+    [commitGraphHistory, isEditor, withBoard],
   );
 
   const onNodeDragStart = useCallback(
@@ -2022,7 +2279,7 @@ function GoalGraphClientInner({
       const goalId = selectedGoalId;
       const title = selectedTitle;
       const description = selectedDescription;
-      void updateGoalRef.current(goalId, { title, description }).then(() => {
+      void updateGoalRef.current(goalId, { title, description }, { recordHistory: false }).then(() => {
         if (goalTextSyncedRef.current?.id !== goalId) return;
         goalTextSyncedRef.current = { id: goalId, title, description };
       });
@@ -2038,10 +2295,14 @@ function GoalGraphClientInner({
       if (!goalIdWhenFocused || !isEditor) return;
       const node = nodesRef.current.find((n) => n.id === goalIdWhenFocused);
       if (!node) return;
-      void updateGoalRef.current(goalIdWhenFocused, {
-        title: node.data.title,
-        description: node.data.description,
-      });
+      void updateGoalRef.current(
+        goalIdWhenFocused,
+        {
+          title: node.data.title,
+          description: node.data.description,
+        },
+        { recordHistory: false },
+      );
     };
   }, [selectedGoalId, isEditor]);
 
@@ -2130,11 +2391,15 @@ function GoalGraphClientInner({
         }
 
         if (patch.x !== undefined || patch.y !== undefined) {
-          await updateGoal(id, patch);
+          await updateGoal(id, patch, { recordHistory: false });
         }
       }
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      if (!skipGraphHistoryRef.current) {
+        commitGraphHistory(nodesRef.current, edgesRef.current);
+      }
     },
-    [updateGoal],
+    [commitGraphHistory, updateGoal],
   );
 
   const snapSelectedGoalsToGridFromContextMenu = useCallback(async () => {
@@ -2153,10 +2418,14 @@ function GoalGraphClientInner({
       if (!n) continue;
       const snapped = snapFlowTopLeftToGrid(n.position);
       if (Math.abs(snapped.x - n.position.x) > 0.5 || Math.abs(snapped.y - n.position.y) > 0.5) {
-        await updateGoal(id, { x: snapped.x, y: snapped.y });
+        await updateGoal(id, { x: snapped.x, y: snapped.y }, { recordHistory: false });
       }
     }
-  }, [isEditor, updateGoal]);
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    if (!skipGraphHistoryRef.current) {
+      commitGraphHistory(nodesRef.current, edgesRef.current);
+    }
+  }, [commitGraphHistory, isEditor, updateGoal]);
 
   const deleteMultipleGoalsFromContextMenu = useCallback(async () => {
     const ids = nodesRef.current.filter((n) => n.selected).map((n) => n.id);
@@ -2181,15 +2450,22 @@ function GoalGraphClientInner({
         ),
       );
       const idSet = new Set(ids);
-      setNodes((prev) => prev.filter((node) => !idSet.has(node.id)));
-      setEdges((prev) => prev.filter((edge) => !idSet.has(edge.source) && !idSet.has(edge.target)));
+      const nextNodes = nodesRef.current.filter((node) => !idSet.has(node.id));
+      const nextEdges = edgesRef.current.filter(
+        (edge) => !idSet.has(edge.source) && !idSet.has(edge.target),
+      );
+      setNodes(nextNodes);
+      setEdges(nextEdges);
+      if (!skipGraphHistoryRef.current) {
+        commitGraphHistory(nextNodes, nextEdges);
+      }
       setOpenDetailDropdown(null);
       setSelectedGoalId((prev) => (prev && idSet.has(prev) ? null : prev));
       void loadNext();
     } catch (deleteError) {
       setError(deleteError instanceof Error ? deleteError.message : "Failed to delete goals");
     }
-  }, [isEditor, loadNext, withBoard]);
+  }, [commitGraphHistory, isEditor, loadNext, setSelectedGoalId, withBoard]);
 
   const createBoard = useCallback(async (title: string) => {
     try {
@@ -2708,31 +2984,51 @@ function GoalGraphClientInner({
             />
             <Controls position="bottom-left" showInteractive={false}>
               {isEditor ? (
-                <ControlButton
-                  onClick={() => {
-                    setGridSnapEnabled((previous) => {
-                      const next = !previous;
-                      persistUserUiSettings({ graphGridSnapEnabled: next });
-                      return next;
-                    });
-                  }}
-                  title={
-                    gridSnapEnabled
-                      ? "Отключить прилипание к точкам сетки (Ctrl при перетаскивании — без привязки)"
-                      : "Прилипание к точкам сетки при перетаскивании"
-                  }
-                  aria-label={
-                    gridSnapEnabled
-                      ? "Отключить прилипание к точкам сетки"
-                      : "Включить прилипание к точкам сетки"
-                  }
-                  aria-pressed={gridSnapEnabled}
-                  className={
-                    gridSnapEnabled ? "!bg-[#D39A43]/22 text-[#F2EEE6] hover:!bg-[#D39A43]/30" : undefined
-                  }
-                >
-                  <MagnetToolbarIcon className="h-[18px] w-[18px]" />
-                </ControlButton>
+                <>
+                  <ControlButton
+                    type="button"
+                    onClick={() => void undoGraph()}
+                    disabled={!canUndoGraph}
+                    title="Назад по истории графа (⌘Z / Ctrl+Z)"
+                    aria-label="Отменить изменение графа"
+                  >
+                    <ChevronIcon direction="left" className="h-[18px] w-[18px]" />
+                  </ControlButton>
+                  <ControlButton
+                    type="button"
+                    onClick={() => void redoGraph()}
+                    disabled={!canRedoGraph}
+                    title="Вперёд по истории графа (⌘⇧Z / Ctrl+Shift+Z)"
+                    aria-label="Вернуть изменение графа"
+                  >
+                    <ChevronIcon direction="right" className="h-[18px] w-[18px]" />
+                  </ControlButton>
+                  <ControlButton
+                    onClick={() => {
+                      setGridSnapEnabled((previous) => {
+                        const next = !previous;
+                        persistUserUiSettings({ graphGridSnapEnabled: next });
+                        return next;
+                      });
+                    }}
+                    title={
+                      gridSnapEnabled
+                        ? "Отключить прилипание к точкам сетки (Ctrl при перетаскивании — без привязки)"
+                        : "Прилипание к точкам сетки при перетаскивании"
+                    }
+                    aria-label={
+                      gridSnapEnabled
+                        ? "Отключить прилипание к точкам сетки"
+                        : "Включить прилипание к точкам сетки"
+                    }
+                    aria-pressed={gridSnapEnabled}
+                    className={
+                      gridSnapEnabled ? "!bg-[#D39A43]/22 text-[#F2EEE6] hover:!bg-[#D39A43]/30" : undefined
+                    }
+                  >
+                    <MagnetToolbarIcon className="h-[18px] w-[18px]" />
+                  </ControlButton>
+                </>
               ) : null}
             </Controls>
           </ReactFlow>

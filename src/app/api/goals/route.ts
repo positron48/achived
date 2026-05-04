@@ -31,10 +31,11 @@ export async function POST(request: Request) {
     );
   }
 
-  const { startsOn, ...rest } = parsed.data;
+  const { startsOn, id: clientId, ...rest } = parsed.data;
 
   const goal = await prisma.goal.create({
     data: {
+      ...(clientId ? { id: clientId } : {}),
       boardId,
       title: rest.title,
       description: rest.description ?? "",
