@@ -11,6 +11,8 @@ export type ApiGoal = {
   type: GoalType;
   x: number;
   y: number;
+  /** YYYY-MM-DD или null — не раньше этого дня смысловая готовность к работе. */
+  startsOn: string | null;
   createdAt?: string | Date;
   updatedAt: string | Date;
 };
@@ -61,6 +63,15 @@ export type GraphResponse = {
   goals: ApiGoal[];
   edges: ApiEdge[];
 };
+
+/** Строка YYYY-MM-DD для полей даты из Prisma `Date` / ISO из JSON. */
+export function normalizeGoalStartsOn(value: string | Date | null | undefined): string | null {
+  if (value == null) return null;
+  if (typeof value === "string") {
+    return value.length >= 10 ? value.slice(0, 10) : null;
+  }
+  return value.toISOString().slice(0, 10);
+}
 
 export type BoardRole = "OWNER" | "EDITOR" | "VIEWER";
 

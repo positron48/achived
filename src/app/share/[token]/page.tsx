@@ -1,5 +1,5 @@
 import { GoalGraphClient } from "@/components/GoalGraphClient";
-import { dbEdgeRowToApiEdge } from "@/lib/graph-types";
+import { dbEdgeRowToApiEdge, normalizeGoalStartsOn, type ApiGoal } from "@/lib/graph-types";
 import { prisma } from "@/server/db";
 import { getNextGoals } from "@/server/domain";
 
@@ -51,7 +51,20 @@ export default async function SharePage({ params }: SharePageProps) {
     }),
   ]);
   const edges = edgeRows.map(dbEdgeRowToApiEdge);
-  const initialNext = getNextGoals(goals, edges);
+  const apiGoals: ApiGoal[] = goals.map((goal) => ({
+    id: goal.id,
+    title: goal.title,
+    description: goal.description,
+    status: goal.status,
+    priority: goal.priority,
+    type: goal.type,
+    x: goal.x,
+    y: goal.y,
+    startsOn: normalizeGoalStartsOn(goal.startsOn),
+    createdAt: goal.createdAt,
+    updatedAt: goal.updatedAt,
+  }));
+  const initialNext = getNextGoals(apiGoals, edges);
 
   return (
     <main className="flex h-screen w-full flex-col">
@@ -62,7 +75,7 @@ export default async function SharePage({ params }: SharePageProps) {
         currentUserEmail={null}
         isPublicView
         publicBoardTitle={board.title}
-        initialGraph={{ goals, edges }}
+        initialGraph={{ goals: apiGoals, edges }}
         initialNext={initialNext}
       />
     </main>

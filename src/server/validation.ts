@@ -7,6 +7,11 @@ const goalTitleValue = z
   .max(120)
   .refine((s) => s.trim().length > 0, { message: "empty title" });
 
+const calendarDayString = z.union([
+  z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  z.null(),
+]);
+
 export const createGoalSchema = z.object({
   title: goalTitleValue,
   description: z.string().max(5000).optional(),
@@ -14,6 +19,7 @@ export const createGoalSchema = z.object({
   priority: z.number().int().min(1).max(5).optional(),
   x: z.number().optional(),
   y: z.number().optional(),
+  startsOn: calendarDayString.optional(),
 });
 
 export const updateGoalSchema = createGoalSchema.partial().extend({
@@ -55,3 +61,11 @@ export const updateBoardMemberSchema = z.object({
 export const updateBoardPublicSchema = z.object({
   enabled: z.boolean(),
 });
+
+export const updateUserSettingsSchema = z
+  .object({
+    graphGridSnapEnabled: z.boolean().optional(),
+    graphLeftSidebarOpen: z.boolean().optional(),
+    graphRightSidebarOpen: z.boolean().optional(),
+  })
+  .refine((data) => Object.keys(data).length > 0, { message: "empty patch" });

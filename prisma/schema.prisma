@@ -18,6 +18,8 @@ model Goal {
   type          GoalType    @default(TASK)
   x             Float       @default(0)
   y             Float       @default(0)
+  /// Не раньше этого календарного дня можно брать в работу (локальная дата клиента при выборе).
+  startsOn      DateTime?   @db.Date
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
   outgoingEdges GoalEdge[]  @relation("SourceGoal")
@@ -44,15 +46,29 @@ model GoalEdge {
 }
 
 model User {
-  id           String        @id @default(cuid())
-  email        String        @unique
+  id           String         @id @default(cuid())
+  email        String         @unique
   name         String?
   avatarUrl    String?
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
   authAccounts AuthAccount[]
-  ownedBoards  Board[]       @relation("BoardOwner")
+  ownedBoards  Board[]        @relation("BoardOwner")
   boardMembers BoardMember[]
+  settings     UserSettings?
+}
+
+/// Персональные настройки UI (привязка к сетке, панели графа).
+model UserSettings {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  graphGridSnapEnabled  Boolean @default(false)
+  graphLeftSidebarOpen  Boolean @default(true)
+  graphRightSidebarOpen Boolean @default(true)
+
+  updatedAt DateTime @updatedAt
 }
 
 model AuthAccount {

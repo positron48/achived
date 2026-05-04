@@ -1,6 +1,11 @@
 import { GoalGraphClient } from "@/components/GoalGraphClient";
 import { GoogleSignInButton } from "@/components/GoogleSignInButton";
-import { dbEdgeRowToApiEdge, type BoardSummary } from "@/lib/graph-types";
+import {
+  dbEdgeRowToApiEdge,
+  normalizeGoalStartsOn,
+  type ApiGoal,
+  type BoardSummary,
+} from "@/lib/graph-types";
 import { getUserBoardRole } from "@/server/board-access";
 import { getSessionUser } from "@/server/auth-session";
 import { ensureUserHasBoard } from "@/server/boards";
@@ -60,6 +65,12 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   const role = await getUserBoardRole(selectedBoard.id, user.id);
   const resolvedRole = role ?? ("VIEWER" as BoardSummary["role"]);
 
+  const userUiSettings = await prisma.userSettings.upsert({
+    where: { userId: user.id },
+    create: { userId: user.id },
+    update: {},
+  });
+
   const [goals, edges] = await Promise.all([
     prisma.goal.findMany({
       where: { boardId: selectedBoard.id },
@@ -72,6 +83,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         type: true,
         x: true,
         y: true,
+        startsOn: true,
+        createdAt: true,
         updatedAt: true,
       },
       orderBy: {
@@ -93,7 +106,20 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     }),
   ]);
   const apiEdges = edges.map(dbEdgeRowToApiEdge);
-  const initialNext = getNextGoals(goals, apiEdges);
+  const apiGoals: ApiGoal[] = goals.map((goal) => ({
+    id: goal.id,
+    title: goal.title,
+    description: goal.description,
+    status: goal.status,
+    priority: goal.priority,
+    type: goal.type,
+    x: goal.x,
+    y: goal.y,
+    startsOn: normalizeGoalStartsOn(goal.startsOn),
+    createdAt: goal.createdAt,
+    updatedAt: goal.updatedAt,
+  }));
+  const initialNext = getNextGoals(apiGoals, apiEdges);
 
   return (
     <main className="flex h-screen w-full flex-col">
@@ -102,7 +128,12 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         currentBoardId={selectedBoard.id}
         currentBoardRole={resolvedRole}
         currentUserEmail={user.email}
-        initialGraph={{ goals, edges: apiEdges }}
+        initialUserUiSettings={{
+          graphGridSnapEnabled: userUiSettings.graphGridSnapEnabled,
+          graphLeftSidebarOpen: userUiSettings.graphLeftSidebarOpen,
+          graphRightSidebarOpen: userUiSettings.graphRightSidebarOpen,
+        }}
+        initialGraph={{ goals: apiGoals, edges: apiEdges }}
         initialNext={initialNext}
       />
     </main>

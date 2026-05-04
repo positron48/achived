@@ -31,15 +31,18 @@ export async function POST(request: Request) {
     );
   }
 
+  const { startsOn, ...rest } = parsed.data;
+
   const goal = await prisma.goal.create({
     data: {
       boardId,
-      title: parsed.data.title,
-      description: parsed.data.description ?? "",
-      type: parsed.data.type ?? "TASK",
-      priority: parsed.data.priority ?? 3,
-      x: parsed.data.x ?? 0,
-      y: parsed.data.y ?? 0,
+      title: rest.title,
+      description: rest.description ?? "",
+      type: rest.type ?? "TASK",
+      priority: rest.priority ?? 3,
+      x: rest.x ?? 0,
+      y: rest.y ?? 0,
+      ...(startsOn ? { startsOn: new Date(startsOn) } : {}),
     },
   });
 

@@ -55,7 +55,16 @@ import {
   type EdgeWaypoint,
   type GraphResponse,
   type NextGoalItem,
+  normalizeGoalStartsOn,
 } from "@/lib/graph-types";
+import type { UserUiSettings } from "@/lib/user-ui-settings";
+import { isBeforeStartCalendarDay } from "@/lib/schedule";
+
+const DEFAULT_USER_UI_SETTINGS: UserUiSettings = {
+  graphGridSnapEnabled: false,
+  graphLeftSidebarOpen: true,
+  graphRightSidebarOpen: true,
+};
 
 type GoalNodeData = {
   title: string;
@@ -64,6 +73,9 @@ type GoalNodeData = {
   priority: number;
   type: GoalType;
   computedState: ComputedState;
+  lockReason: "deps" | "schedule" | null;
+  /** YYYY-MM-DD или пусто — не раньше этого дня имеет смысл начинать. */
+  startsOn: string | null;
   isConnecting: boolean;
 };
 
@@ -336,6 +348,11 @@ const stateTitle: Record<ComputedState, string> = {
   DONE: "Завершено",
   DROPPED: "Отменено",
 };
+
+function stateChipLabel(state: ComputedState, lockReason: GoalNodeData["lockReason"]): string {
+  if (state === "LOCKED" && lockReason === "schedule") return "Срок не наступил";
+  return stateTitle[state];
+}
 
 type RectNode = {
   centerX: number;
@@ -800,7 +817,9 @@ function BoundaryConnectionLine({
 
 function GoalNode({ data, selected }: NodeProps<Node<GoalNodeData>>) {
   const tone = stateTone[data.computedState];
-  const isDimmed = data.computedState === "LOCKED" || data.computedState === "BLOCKED";
+  const isDone = data.computedState === "DONE";
+  const isDimmed =
+    !isDone && (data.computedState === "LOCKED" || data.computedState === "BLOCKED");
   const canDropNow = data.isConnecting;
   const targetHandleStyle = {
     left: "-3px",
@@ -828,8 +847,10 @@ function GoalNode({ data, selected }: NodeProps<Node<GoalNodeData>>) {
   return (
     <div
       className={`relative min-h-24 min-w-64 rounded-2xl border px-4 py-3 shadow-[0_12px_28px_rgba(0,0,0,.25)] transition ${
-        tone.border
-      } ${tone.card} ${isDimmed ? "opacity-[0.64] saturate-[0.58]" : ""} ${
+        isDone
+          ? "border-[#4D6A40]/45 bg-[#0F150F] opacity-[0.88] saturate-[0.85] shadow-[0_8px_20px_rgba(40,80,40,0.12)]"
+          : `${tone.border} ${tone.card} ${isDimmed ? "opacity-[0.64] saturate-[0.58]" : ""}`
+      } ${
         selected ? "ring-1 ring-[#D39A43] shadow-[0_0_0_1px_rgba(211,154,67,.7),0_0_28px_rgba(211,154,67,.16)]" : ""
       }`}
     >
@@ -899,14 +920,33 @@ function GoalNode({ data, selected }: NodeProps<Node<GoalNodeData>>) {
 
       <div className="relative z-10 flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="truncate text-[15px] font-semibold text-[#F2EEE6]">{data.title || "Untitled goal"}</p>
-          <p className="mt-1 text-[11px] text-[#B8B0A3]">{typeLabel[data.type]}</p>
+          <p
+            className={`truncate text-[15px] font-semibold ${isDone ? "text-[#B8C9A8]" : "text-[#F2EEE6]"}`}
+          >
+            {data.title || "Untitled goal"}
+          </p>
+          <p className={`mt-1 text-[11px] ${isDone ? "text-[#7A8B6C]" : "text-[#B8B0A3]"}`}>
+            {typeLabel[data.type]}
+          </p>
         </div>
-        <span className={`mt-1 h-2.5 w-2.5 rounded-full ${tone.dot}`} />
+        {isDone ? (
+          <span
+            className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-[#6B8F52]/55 bg-[#152018]"
+            aria-hidden
+          >
+            <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 text-[#8FD973]" fill="none" stroke="currentColor" strokeWidth={2.4}>
+              <path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </span>
+        ) : (
+          <span className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${tone.dot}`} />
+        )}
       </div>
 
       <div className="relative z-10 mt-3 flex items-center justify-between">
-        <span className={`rounded-full border px-2 py-0.5 text-[10px] ${tone.chip}`}>{stateTitle[data.computedState]}</span>
+        <span className={`rounded-full border px-2 py-0.5 text-[10px] ${tone.chip}`}>
+          {stateChipLabel(data.computedState, data.lockReason)}
+        </span>
         <span className={`text-[11px] ${priorityTone(data.priority)}`}>⚑ {priorityLabel(data.priority)}</span>
       </div>
 
@@ -919,14 +959,18 @@ const typeOptions: GoalType[] = ["EPIC", "MILESTONE", "TASK", "HABIT"];
 
 type DetailDropdownKind = "status" | "priority" | "type";
 
-function getComputedState(
+function getComputedNodeState(
   node: Node<GoalNodeData>,
   nodes: Node<GoalNodeData>[],
   edges: Edge[],
-): ComputedState {
-  if (node.data.status === "DONE") return "DONE";
-  if (node.data.status === "DROPPED") return "DROPPED";
-  if (node.data.status === "BLOCKED") return "BLOCKED";
+): { computedState: ComputedState; lockReason: GoalNodeData["lockReason"] } {
+  if (node.data.status === "DONE") return { computedState: "DONE", lockReason: null };
+  if (node.data.status === "DROPPED") return { computedState: "DROPPED", lockReason: null };
+  if (node.data.status === "BLOCKED") return { computedState: "BLOCKED", lockReason: null };
+
+  if (isBeforeStartCalendarDay(node.data.startsOn)) {
+    return { computedState: "LOCKED", lockReason: "schedule" };
+  }
 
   const blockers = edges
     .filter((edge) => edge.source && edge.target === node.id)
@@ -934,19 +978,23 @@ function getComputedState(
     .filter((candidate): candidate is Node<GoalNodeData> => Boolean(candidate))
     .filter((candidate) => candidate.data.status !== "DONE");
 
-  if (blockers.length > 0) return "LOCKED";
-  if (node.data.status === "ACTIVE") return "ACTIVE";
-  return "AVAILABLE";
+  if (blockers.length > 0) return { computedState: "LOCKED", lockReason: "deps" };
+  if (node.data.status === "ACTIVE") return { computedState: "ACTIVE", lockReason: null };
+  return { computedState: "AVAILABLE", lockReason: null };
 }
 
 function applyComputedStates(nodes: Node<GoalNodeData>[], edges: Edge[]) {
-  return nodes.map((node) => ({
-    ...node,
-    data: {
-      ...node.data,
-      computedState: getComputedState(node, nodes, edges),
-    },
-  }));
+  return nodes.map((node) => {
+    const { computedState, lockReason } = getComputedNodeState(node, nodes, edges);
+    return {
+      ...node,
+      data: {
+        ...node.data,
+        computedState,
+        lockReason,
+      },
+    };
+  });
 }
 
 function toFlowNode(goal: ApiGoal): Node<GoalNodeData> {
@@ -961,6 +1009,8 @@ function toFlowNode(goal: ApiGoal): Node<GoalNodeData> {
       priority: goal.priority,
       type: goal.type,
       computedState: "AVAILABLE",
+      lockReason: null,
+      startsOn: normalizeGoalStartsOn(goal.startsOn),
       isConnecting: false,
     },
     draggable: true,
@@ -1120,6 +1170,7 @@ type GoalGraphClientInnerProps = {
   publicBoardTitle?: string;
   initialGraph: GraphResponse;
   initialNext: NextGoalItem[];
+  initialUserUiSettings?: UserUiSettings | null;
 };
 
 type FlowContextMenuState =
@@ -1142,9 +1193,24 @@ function GoalGraphClientInner({
   publicBoardTitle,
   initialGraph,
   initialNext,
+  initialUserUiSettings = null,
 }: GoalGraphClientInnerProps) {
   const isEditor =
     !isPublicView && (currentBoardRole === "OWNER" || currentBoardRole === "EDITOR");
+
+  const userUiDefaults = initialUserUiSettings ?? DEFAULT_USER_UI_SETTINGS;
+
+  const persistUserUiSettings = useCallback(
+    (patch: Partial<UserUiSettings>) => {
+      if (isPublicView || !currentUserEmail) return;
+      void fetch("/api/user/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      }).catch(() => {});
+    },
+    [currentUserEmail, isPublicView],
+  );
 
   const reactFlow = useReactFlow<Node<GoalNodeData>, Edge>();
   const flowSectionRef = useRef<HTMLElement | null>(null);
@@ -1155,6 +1221,15 @@ function GoalGraphClientInner({
   const [edges, setEdges] = useState<Edge[]>(() =>
     initialGraph.edges.map((edge) => toFlowEdge(edge, isEditor)),
   );
+  const edgesRef = useRef(edges);
+  useEffect(() => {
+    edgesRef.current = edges;
+  }, [edges]);
+  /** Перетаскивание группы узлов: эталонные точки траектории для рёбер между двумя выбранными узлами. */
+  const nodeDragWaypointsRef = useRef<{
+    anchorStart: { x: number; y: number };
+    internalEdges: { id: string; waypoints: EdgeWaypoint[] }[];
+  } | null>(null);
   const [nextGoals, setNextGoals] = useState<NextGoalItem[]>(initialNext);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1201,14 +1276,14 @@ function GoalGraphClientInner({
   const detailStatusAnchorRef = useRef<HTMLButtonElement | null>(null);
   const detailPriorityAnchorRef = useRef<HTMLButtonElement | null>(null);
   const detailTypeAnchorRef = useRef<HTMLButtonElement | null>(null);
-  const [leftSidebarOpen, setLeftSidebarOpen] = useState(true);
-  const [rightSidebarOpen, setRightSidebarOpen] = useState(true);
+  const [leftSidebarOpen, setLeftSidebarOpen] = useState(userUiDefaults.graphLeftSidebarOpen);
+  const [rightSidebarOpen, setRightSidebarOpen] = useState(userUiDefaults.graphRightSidebarOpen);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const userMenuRef = useRef<HTMLDivElement | null>(null);
   const [flowContextMenu, setFlowContextMenu] = useState<FlowContextMenuState | null>(null);
   const flowContextMenuRef = useRef<HTMLDivElement | null>(null);
   const prevLeftSidebarOpenRef = useRef(leftSidebarOpen);
-  const [gridSnapEnabled, setGridSnapEnabled] = useState(false);
+  const [gridSnapEnabled, setGridSnapEnabled] = useState(userUiDefaults.graphGridSnapEnabled);
   /** Зажатый Ctrl временно отключает привязку к сетке при перетаскивании узлов и точек связи. */
   const [ctrlHeldForSnapBypass, setCtrlHeldForSnapBypass] = useState(false);
 
@@ -1552,7 +1627,9 @@ function GoalGraphClientInner({
   const updateGoal = useCallback(
     async (
       goalId: string,
-      patch: Partial<Pick<ApiGoal, "title" | "description" | "status" | "priority" | "type" | "x" | "y">>,
+      patch: Partial<
+        Pick<ApiGoal, "title" | "description" | "status" | "priority" | "type" | "x" | "y" | "startsOn">
+      >,
     ) => {
       if (!isEditor) {
         setError("У вас только read-only доступ к этой доске.");
@@ -1583,6 +1660,7 @@ function GoalGraphClientInner({
                       status: updated.status,
                       priority: updated.priority,
                       type: updated.type,
+                      startsOn: normalizeGoalStartsOn(updated.startsOn),
                     },
                   }
                 : node,
@@ -1760,22 +1838,6 @@ function GoalGraphClientInner({
     [isEditor, isPublicView, reactFlow],
   );
 
-  const onNodeDragStop = useCallback(
-    async (_event: ReactMouseEvent, node: Node<GoalNodeData>, draggedNodes: Node<GoalNodeData>[]) => {
-      if (!isEditor) return;
-
-      const targets = draggedNodes.length > 0 ? draggedNodes : [node];
-
-      for (const n of targets) {
-        await updateGoal(n.id, {
-          x: n.position.x,
-          y: n.position.y,
-        });
-      }
-    },
-    [isEditor, updateGoal],
-  );
-
   const onEdgeDoubleClick = useCallback(async (_: unknown, edge: Edge) => {
     if (!isEditor) {
       setError("У вас только read-only доступ к этой доске.");
@@ -1830,6 +1892,76 @@ function GoalGraphClientInner({
     [isEditor, withBoard],
   );
 
+  const onNodeDragStart = useCallback(
+    (_event: ReactMouseEvent, node: Node<GoalNodeData>, dragged: Node<GoalNodeData>[]) => {
+      if (!isEditor) return;
+      const group = dragged.length > 0 ? dragged : [node];
+      const ids = new Set(group.map((n) => n.id));
+      const anchorStart = { x: node.position.x, y: node.position.y };
+      const internalEdges: { id: string; waypoints: EdgeWaypoint[] }[] = [];
+      for (const e of edgesRef.current) {
+        if (ids.has(e.source) && ids.has(e.target)) {
+          const wps = normalizeEdgeWaypointsArray(
+            (e.data as { waypoints?: EdgeWaypoint[] } | undefined)?.waypoints,
+          );
+          internalEdges.push({ id: e.id, waypoints: wps.map((w) => ({ x: w.x, y: w.y })) });
+        }
+      }
+      nodeDragWaypointsRef.current = { anchorStart, internalEdges };
+    },
+    [isEditor],
+  );
+
+  const onNodeDrag = useCallback(
+    (_event: ReactMouseEvent, node: Node<GoalNodeData>) => {
+      const snap = nodeDragWaypointsRef.current;
+      if (!snap || snap.internalEdges.length === 0) return;
+      const dx = node.position.x - snap.anchorStart.x;
+      const dy = node.position.y - snap.anchorStart.y;
+      setEdges((prev) =>
+        prev.map((edge) => {
+          const hit = snap.internalEdges.find((ie) => ie.id === edge.id);
+          if (!hit) return edge;
+          const newWps = hit.waypoints.map((wp) => ({ x: wp.x + dx, y: wp.y + dy }));
+          return { ...edge, data: { ...(edge.data ?? {}), waypoints: newWps } };
+        }),
+      );
+    },
+    [],
+  );
+
+  const onNodeDragStop = useCallback(
+    async (_event: ReactMouseEvent, node: Node<GoalNodeData>, draggedNodes: Node<GoalNodeData>[]) => {
+      if (!isEditor) return;
+
+      const snap = nodeDragWaypointsRef.current;
+      nodeDragWaypointsRef.current = null;
+
+      const targets = draggedNodes.length > 0 ? draggedNodes : [node];
+
+      for (const n of targets) {
+        await updateGoal(n.id, {
+          x: n.position.x,
+          y: n.position.y,
+        });
+      }
+
+      if (snap?.internalEdges.length) {
+        for (const ie of snap.internalEdges) {
+          const current = edgesRef.current.find((e) => e.id === ie.id);
+          if (!current) continue;
+          const wps = normalizeEdgeWaypointsArray(
+            (current.data as { waypoints?: EdgeWaypoint[] } | undefined)?.waypoints,
+          );
+          if (wps.length > 0) {
+            await updateEdgeWaypoints(ie.id, wps);
+          }
+        }
+      }
+    },
+    [isEditor, updateEdgeWaypoints, updateGoal],
+  );
+
   const edgeWaypointActionsValue = useMemo(
     () => ({
       isEditor,
@@ -1864,6 +1996,7 @@ function GoalGraphClientInner({
   const selectedStatus = selectedGoalNode?.data.status ?? "TODO";
   const selectedPriority = selectedGoalNode?.data.priority ?? 3;
   const selectedType = selectedGoalNode?.data.type ?? "TASK";
+  const selectedStartsOn = selectedGoalNode?.data.startsOn ?? "";
 
   useEffect(() => {
     if (!selectedGoalNode) {
@@ -2382,7 +2515,10 @@ function GoalGraphClientInner({
             type="button"
             className="pointer-events-auto absolute left-0 top-1/2 z-20 flex h-16 w-4 -translate-y-1/2 items-center justify-center rounded-r-lg border border-l-0 border-white/10 bg-[#171918] text-[#B8B0A3] shadow-lg transition hover:bg-[#1D201E] hover:text-[#F2EEE6]"
             aria-label="Показать левую панель"
-            onClick={() => setLeftSidebarOpen(true)}
+            onClick={() => {
+              setLeftSidebarOpen(true);
+              persistUserUiSettings({ graphLeftSidebarOpen: true });
+            }}
           >
             <ChevronIcon direction="right" className="h-3 w-3" />
           </button>
@@ -2489,7 +2625,10 @@ function GoalGraphClientInner({
                 type="button"
                 className="grid h-8 w-8 place-items-center rounded-lg border border-transparent text-[#B8B0A3] transition hover:border-white/10 hover:bg-white/5 hover:text-[#F2EEE6]"
                 aria-label="Скрыть левую панель"
-                onClick={() => setLeftSidebarOpen(false)}
+                onClick={() => {
+                  setLeftSidebarOpen(false);
+                  persistUserUiSettings({ graphLeftSidebarOpen: false });
+                }}
               >
                 <ChevronIcon direction="left" />
               </button>
@@ -2517,6 +2656,8 @@ function GoalGraphClientInner({
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onNodeClick={onNodeClick}
+            onNodeDragStart={onNodeDragStart}
+            onNodeDrag={onNodeDrag}
             onNodeDragStop={onNodeDragStop}
             onConnect={onConnect}
             onConnectStart={onConnectStart}
@@ -2568,7 +2709,13 @@ function GoalGraphClientInner({
             <Controls position="bottom-left" showInteractive={false}>
               {isEditor ? (
                 <ControlButton
-                  onClick={() => setGridSnapEnabled((previous) => !previous)}
+                  onClick={() => {
+                    setGridSnapEnabled((previous) => {
+                      const next = !previous;
+                      persistUserUiSettings({ graphGridSnapEnabled: next });
+                      return next;
+                    });
+                  }}
                   title={
                     gridSnapEnabled
                       ? "Отключить прилипание к точкам сетки (Ctrl при перетаскивании — без привязки)"
@@ -2865,6 +3012,24 @@ function GoalGraphClientInner({
                 />
               </label>
 
+              <label className="block text-xs text-[#B8B0A3]">
+                Дата начала
+                <input
+                  type="date"
+                  className="mt-1 h-10 w-full rounded-xl border border-white/10 bg-[#181B1A] px-3 text-sm text-[#F2EEE6] outline-none focus:border-[#D39A43]/45"
+                  value={selectedStartsOn}
+                  disabled={!isEditor}
+                  onChange={(event) => {
+                    const next = event.target.value || null;
+                    setNodeField(selectedGoalNode.id, { startsOn: next });
+                    void updateGoal(selectedGoalNode.id, { startsOn: next });
+                  }}
+                />
+                <p className="mt-1 text-[11px] text-[#6F6A62]">
+                  До этой даты цель заблокирована, даже если от других целей не зависит.
+                </p>
+              </label>
+
               <button
                 type="button"
                 className="h-10 w-full rounded-xl border border-[#A94F3D]/50 bg-[#2A1A18] text-sm text-[#F0B0A0] hover:bg-[#351F1B] disabled:opacity-50"
@@ -2902,7 +3067,10 @@ function GoalGraphClientInner({
                 type="button"
                 className="grid h-8 w-8 place-items-center rounded-lg border border-transparent text-[#B8B0A3] transition hover:border-white/10 hover:bg-white/5 hover:text-[#F2EEE6]"
                 aria-label="Скрыть правую панель"
-                onClick={() => setRightSidebarOpen(false)}
+                onClick={() => {
+                  setRightSidebarOpen(false);
+                  persistUserUiSettings({ graphRightSidebarOpen: false });
+                }}
               >
                 <ChevronIcon direction="right" />
               </button>
@@ -2915,7 +3083,10 @@ function GoalGraphClientInner({
             type="button"
             className="pointer-events-auto absolute right-0 top-1/2 z-20 flex h-16 w-4 -translate-y-1/2 items-center justify-center rounded-l-lg border border-r-0 border-white/10 bg-[#171918] text-[#B8B0A3] shadow-lg transition hover:bg-[#1D201E] hover:text-[#F2EEE6]"
             aria-label="Показать правую панель"
-            onClick={() => setRightSidebarOpen(true)}
+            onClick={() => {
+              setRightSidebarOpen(true);
+              persistUserUiSettings({ graphRightSidebarOpen: true });
+            }}
           >
             <ChevronIcon direction="left" className="h-3 w-3" />
           </button>
@@ -3194,6 +3365,7 @@ type GoalGraphClientProps = {
   publicBoardTitle?: string;
   initialGraph: GraphResponse;
   initialNext: NextGoalItem[];
+  initialUserUiSettings?: UserUiSettings | null;
 };
 
 export function GoalGraphClient({
@@ -3205,6 +3377,7 @@ export function GoalGraphClient({
   publicBoardTitle,
   initialGraph,
   initialNext,
+  initialUserUiSettings,
 }: GoalGraphClientProps) {
   return (
     <ReactFlowProvider>
@@ -3217,6 +3390,7 @@ export function GoalGraphClient({
         publicBoardTitle={publicBoardTitle}
         initialGraph={initialGraph}
         initialNext={initialNext}
+        initialUserUiSettings={initialUserUiSettings}
       />
     </ReactFlowProvider>
   );

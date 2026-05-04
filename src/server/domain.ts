@@ -1,13 +1,18 @@
 import type { ApiEdge, ApiGoal, ComputedState, GoalStatus, NextGoalItem } from "@/lib/graph-types";
+import { isBeforeStartCalendarDay } from "@/lib/schedule";
 
 export function getGoalComputedState(
-  goal: Pick<ApiGoal, "id" | "status">,
+  goal: Pick<ApiGoal, "id" | "status" | "startsOn">,
   goals: Array<Pick<ApiGoal, "id" | "status">>,
   edges: ApiEdge[],
 ): ComputedState {
   if (goal.status === "DONE") return "DONE";
   if (goal.status === "DROPPED") return "DROPPED";
   if (goal.status === "BLOCKED") return "BLOCKED";
+
+  if (isBeforeStartCalendarDay(goal.startsOn)) {
+    return "LOCKED";
+  }
 
   const blockerIds = edges
     .filter((edge) => edge.type === "REQUIRES" && edge.targetId === goal.id)

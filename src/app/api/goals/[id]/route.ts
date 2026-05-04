@@ -45,9 +45,15 @@ export async function PATCH(request: Request, { params }: Context) {
     );
   }
 
+  const data: Record<string, unknown> = { ...parsed.data };
+  if ("startsOn" in data) {
+    const v = data.startsOn;
+    data.startsOn = v === null || v === undefined ? null : new Date(String(v));
+  }
+
   const updatedCount = await prisma.goal.updateMany({
     where: { id, boardId },
-    data: parsed.data,
+    data,
   });
   if (updatedCount.count === 0) {
     return NextResponse.json({ error: "Goal not found" }, { status: 404 });

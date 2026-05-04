@@ -14,6 +14,7 @@ const goals: ApiGoal[] = [
     type: "TASK",
     x: 0,
     y: 0,
+    startsOn: null,
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-02T00:00:00.000Z",
   },
@@ -26,6 +27,7 @@ const goals: ApiGoal[] = [
     type: "TASK",
     x: 0,
     y: 0,
+    startsOn: null,
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-03T00:00:00.000Z",
   },
@@ -38,6 +40,7 @@ const goals: ApiGoal[] = [
     type: "TASK",
     x: 0,
     y: 0,
+    startsOn: null,
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-04T00:00:00.000Z",
   },
@@ -63,5 +66,15 @@ describe("domain logic", () => {
     expect(next.map((goal) => goal.id)).toEqual(["c", "b"]);
     expect(next[0].computedState).toBe("ACTIVE");
     expect(next[1].computedState).toBe("AVAILABLE");
+  });
+
+  it("locks goal until startsOn calendar day", () => {
+    const farFuture = "2099-12-31";
+    const futureGoal: ApiGoal = {
+      ...goals[1],
+      id: "future",
+      startsOn: farFuture,
+    };
+    expect(getGoalComputedState(futureGoal, [futureGoal], [])).toBe("LOCKED");
   });
 });
