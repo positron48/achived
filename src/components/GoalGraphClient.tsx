@@ -177,6 +177,10 @@ function nudgePointTowards(from: { x: number; y: number }, to: { x: number; y: n
   };
 }
 
+function rectCenter(rect: RectNode): { x: number; y: number } {
+  return { x: rect.centerX, y: rect.centerY };
+}
+
 function getArrowPath(start: { x: number; y: number }, end: { x: number; y: number }) {
   const dx = end.x - start.x;
   const dy = end.y - start.y;
@@ -217,7 +221,11 @@ function BoundaryStraightEdge({ id, source, target, style }: EdgeProps) {
     halfH: targetHeight / 2,
   };
 
-  const sourcePoint = nudgePointTowards(getIntersectionPoint(sourceRect, targetRect), targetRect, 1);
+  const sourcePoint = nudgePointTowards(
+    getIntersectionPoint(sourceRect, targetRect),
+    rectCenter(targetRect),
+    1,
+  );
   const targetPoint = getIntersectionPoint(targetRect, sourceRect);
 
   const [edgePath] = getStraightPath({
@@ -284,7 +292,7 @@ function BoundaryConnectionLine({
   const sourceAnchor = sourceRect
     ? nudgePointTowards(
         getIntersectionPoint(sourceRect, targetRect ?? { centerX: toX, centerY: toY, halfW: 1, halfH: 1 }),
-        targetRect ?? { centerX: toX, centerY: toY, halfW: 1, halfH: 1 },
+        targetRect ? rectCenter(targetRect) : { x: toX, y: toY },
         1,
       )
     : { x: fromX, y: fromY };
@@ -915,6 +923,15 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
         >
           + Новая цель
         </button>
+        <button
+          type="button"
+          className="grid h-10 w-10 place-items-center rounded-xl border border-white/10 bg-[#181B1A] text-[#B8B0A3] transition hover:bg-white/5 hover:text-[#F2EEE6]"
+          onClick={loadGraph}
+          title="Обновить граф"
+          aria-label="Обновить граф"
+        >
+          ↻
+        </button>
 
         <div className="flex items-center gap-4 text-xs text-[#B8B0A3]">
           <div className="text-right">
@@ -934,17 +951,6 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
 
       <div className="flex min-h-0 flex-1">
         <aside className="w-[300px] overflow-y-auto border-r border-white/10 bg-[#171918] p-4">
-          <div className="mb-5 flex items-center justify-between">
-            <h2 className="text-xs font-semibold uppercase tracking-[0.08em] text-[#B8B0A3]">Фокус</h2>
-            <button
-              type="button"
-              className="rounded-lg border border-white/10 px-2 py-1 text-[11px] text-[#B8B0A3] hover:bg-white/5"
-              onClick={loadGraph}
-            >
-              Обновить
-            </button>
-          </div>
-
           <div className="space-y-5">
             <section>
               <div className="mb-2 flex items-center justify-between">
