@@ -5,7 +5,6 @@ import { prisma } from "@/server/db";
 import { ensureLegacyDataClaimedByFirstUser } from "@/server/boards";
 
 export const authOptions: NextAuthOptions = {
-  trustHost: true,
   providers: [
     Google({
       clientId: process.env.GOOGLE_CLIENT_ID ?? "",
