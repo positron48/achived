@@ -568,7 +568,7 @@ function BoundaryStraightEdge({
       event.preventDefault();
 
       const draft = setupDraft();
-      const snapWp = wa.gridSnapEnabled && !event.shiftKey;
+      const snapWp = wa.gridSnapEnabled && !event.ctrlKey;
       if (snapWp && draft[dragIndex]) {
         draft[dragIndex] = snapFlowTopLeftToGrid(draft[dragIndex]!);
       }
@@ -577,7 +577,7 @@ function BoundaryStraightEdge({
 
       const onMove = (ev: PointerEvent) => {
         let p = reactFlow.screenToFlowPosition({ x: ev.clientX, y: ev.clientY });
-        if (wa.gridSnapEnabled && !ev.shiftKey) {
+        if (wa.gridSnapEnabled && !ev.ctrlKey) {
           p = snapFlowTopLeftToGrid(p);
         }
         const base = dragDraftRef.current ?? draft;
@@ -1182,28 +1182,28 @@ function GoalGraphClientInner({
   const flowContextMenuRef = useRef<HTMLDivElement | null>(null);
   const prevLeftSidebarOpenRef = useRef(leftSidebarOpen);
   const [gridSnapEnabled, setGridSnapEnabled] = useState(false);
-  /** Зажатый Shift временно отключает привязку к сетке при перетаскивании узлов и точек связи. */
-  const [shiftHeldForSnapBypass, setShiftHeldForSnapBypass] = useState(false);
+  /** Зажатый Ctrl временно отключает привязку к сетке при перетаскивании узлов и точек связи. */
+  const [ctrlHeldForSnapBypass, setCtrlHeldForSnapBypass] = useState(false);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Shift") {
-        setShiftHeldForSnapBypass(true);
+      if (event.key === "Control") {
+        setCtrlHeldForSnapBypass(true);
       }
     };
     const onKeyUp = (event: KeyboardEvent) => {
-      if (event.key === "Shift") {
-        setShiftHeldForSnapBypass(false);
+      if (event.key === "Control") {
+        setCtrlHeldForSnapBypass(false);
       }
     };
-    const resetShift = () => setShiftHeldForSnapBypass(false);
+    const resetCtrlSnapBypass = () => setCtrlHeldForSnapBypass(false);
 
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
-    window.addEventListener("blur", resetShift);
+    window.addEventListener("blur", resetCtrlSnapBypass);
     const onVisibilityChange = () => {
       if (document.visibilityState === "hidden") {
-        resetShift();
+        resetCtrlSnapBypass();
       }
     };
     document.addEventListener("visibilitychange", onVisibilityChange);
@@ -1211,7 +1211,7 @@ function GoalGraphClientInner({
     return () => {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
-      window.removeEventListener("blur", resetShift);
+      window.removeEventListener("blur", resetCtrlSnapBypass);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   }, []);
@@ -2510,7 +2510,7 @@ function GoalGraphClientInner({
             }}
             nodesDraggable={isEditor}
             nodesConnectable={isEditor}
-            snapToGrid={isEditor && gridSnapEnabled && !shiftHeldForSnapBypass}
+            snapToGrid={isEditor && gridSnapEnabled && !ctrlHeldForSnapBypass}
             snapGrid={[BACKGROUND_GRID_GAP, BACKGROUND_GRID_GAP]}
             fitView
           >
@@ -2542,7 +2542,7 @@ function GoalGraphClientInner({
                   onClick={() => setGridSnapEnabled((previous) => !previous)}
                   title={
                     gridSnapEnabled
-                      ? "Отключить прилипание к точкам сетки (Shift при перетаскивании — без привязки)"
+                      ? "Отключить прилипание к точкам сетки (Ctrl при перетаскивании — без привязки)"
                       : "Прилипание к точкам сетки при перетаскивании"
                   }
                   aria-label={
