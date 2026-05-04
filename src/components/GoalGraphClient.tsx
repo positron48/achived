@@ -28,7 +28,16 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
 
 import type {
   ApiEdge,
@@ -58,6 +67,8 @@ type MemberRole = "VIEWER" | "EDITOR";
 
 const DEFAULT_NODE_WIDTH = 256;
 const DEFAULT_NODE_HEIGHT = 96;
+/** Совпадает с шириной левой колонки (`w-[300px]`); нужна для сдвига viewport при сворачивании. */
+const LEFT_SIDEBAR_WIDTH_PX = 300;
 const EDGE_STROKE = "rgba(216,200,168,.42)";
 const EDGE_WIDTH = 1.2;
 const EDGE_HIT_WIDTH = EDGE_WIDTH + 4;
@@ -442,6 +453,8 @@ function GoalNode({ data, selected }: NodeProps<Node<GoalNodeData>>) {
 const statusOptions: GoalStatus[] = ["TODO", "ACTIVE", "DONE", "BLOCKED", "DROPPED"];
 const typeOptions: GoalType[] = ["EPIC", "MILESTONE", "TASK", "HABIT"];
 
+type DetailDropdownKind = "status" | "priority" | "type";
+
 function getComputedState(
   node: Node<GoalNodeData>,
   nodes: Node<GoalNodeData>[],
@@ -540,6 +553,44 @@ function buildFlowNodes(goals: ApiGoal[], edges: ApiEdge[]) {
   return applyComputedStates(baseNodes, flowEdges);
 }
 
+function ChevronIcon({
+  direction,
+  className = "h-4 w-4",
+}: {
+  direction: "left" | "right";
+  className?: string;
+}) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden
+    >
+      {direction === "left" ? (
+        <path d="M15 18l-6-6 6-6" />
+      ) : (
+        <path d="M9 18l6-6-6-6" />
+      )}
+    </svg>
+  );
+}
+
+function initialsFromEmail(email: string | null | undefined): string {
+  if (!email?.trim()) return "?";
+  const local = email.split("@")[0]?.trim() ?? "";
+  if (!local) return "?";
+  const segments = local.split(/[._+-]+/).filter(Boolean);
+  if (segments.length >= 2) {
+    return (segments[0]!.slice(0, 1) + segments[1]!.slice(0, 1)).toUpperCase();
+  }
+  return (local.slice(0, 2) || "?").toUpperCase();
+}
+
 type ModalProps = {
   title: string;
   onClose: () => void;
@@ -617,6 +668,37 @@ function GoalGraphClientInner({
   const [shareEmail, setShareEmail] = useState("");
   const [shareRole, setShareRole] = useState<MemberRole>("VIEWER");
   const [membersModalOpen, setMembersModalOpen] = useState(false);
+  const [openDetailDropdown, setOpenDetailDropdown] = useState<DetailDropdownKind | null>(null);
+  const [detailMenuBox, setDetailMenuBox] = useState<{
+    top: number;
+    left: number;
+    width: number;
+  } | null>(null);
+  const detailDropdownTriggersRef = useRef<HTMLDivElement | null>(null);
+  const detailDropdownMenuRef = useRef<HTMLDivElement | null>(null);
+  const detailStatusAnchorRef = useRef<HTMLButtonElement | null>(null);
+  const detailPriorityAnchorRef = useRef<HTMLButtonElement | null>(null);
+  const detailTypeAnchorRef = useRef<HTMLButtonElement | null>(null);
+  const [leftSidebarOpen, setLeftSidebarOpen] = useState(true);
+  const [rightSidebarOpen, setRightSidebarOpen] = useState(true);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const userMenuRef = useRef<HTMLDivElement | null>(null);
+  const prevLeftSidebarOpenRef = useRef(leftSidebarOpen);
+
+  useLayoutEffect(() => {
+    const prev = prevLeftSidebarOpenRef.current;
+    if (prev === leftSidebarOpen) {
+      return;
+    }
+    prevLeftSidebarOpenRef.current = leftSidebarOpen;
+
+    const viewport = reactFlow.getViewport();
+    const deltaX = leftSidebarOpen ? -LEFT_SIDEBAR_WIDTH_PX : LEFT_SIDEBAR_WIDTH_PX;
+    void reactFlow.setViewport(
+      { x: viewport.x + deltaX, y: viewport.y, zoom: viewport.zoom },
+      { duration: 0 },
+    );
+  }, [leftSidebarOpen, reactFlow]);
 
   useEffect(() => {
     if (!error) {
@@ -631,6 +713,85 @@ function GoalGraphClientInner({
       window.clearTimeout(timeoutId);
     };
   }, [error]);
+
+  useEffect(() => {
+    setOpenDetailDropdown(null);
+  }, [selectedGoalId]);
+
+  useEffect(() => {
+    if (!openDetailDropdown) return;
+
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target as unknown as globalThis.Node;
+      if (detailDropdownTriggersRef.current?.contains(target)) return;
+      if (detailDropdownMenuRef.current?.contains(target)) return;
+      setOpenDetailDropdown(null);
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpenDetailDropdown(null);
+      }
+    };
+
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [openDetailDropdown]);
+
+  useEffect(() => {
+    if (!userMenuOpen) return;
+
+    const onPointerDown = (event: MouseEvent) => {
+      if (userMenuRef.current?.contains(event.target as unknown as globalThis.Node)) return;
+      setUserMenuOpen(false);
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setUserMenuOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [userMenuOpen]);
+
+  useLayoutEffect(() => {
+    if (!openDetailDropdown) {
+      setDetailMenuBox(null);
+      return;
+    }
+
+    const el =
+      openDetailDropdown === "status"
+        ? detailStatusAnchorRef.current
+        : openDetailDropdown === "priority"
+          ? detailPriorityAnchorRef.current
+          : detailTypeAnchorRef.current;
+
+    if (!el) return;
+
+    const sync = () => {
+      const r = el.getBoundingClientRect();
+      setDetailMenuBox({ top: r.bottom + 4, left: r.left, width: r.width });
+    };
+
+    sync();
+    window.addEventListener("resize", sync);
+    window.addEventListener("scroll", sync, true);
+    return () => {
+      window.removeEventListener("resize", sync);
+      window.removeEventListener("scroll", sync, true);
+    };
+  }, [openDetailDropdown]);
 
   const isEditor = !isPublicView && (currentBoardRole === "OWNER" || currentBoardRole === "EDITOR");
   const canManageShare = !isPublicView && currentBoardRole === "OWNER";
@@ -649,6 +810,11 @@ function GoalGraphClientInner({
     () => nodes.find((node) => node.id === selectedGoalId) ?? null,
     [nodes, selectedGoalId],
   );
+
+  const nodesRef = useRef(nodes);
+  nodesRef.current = nodes;
+
+  const goalTextSyncedRef = useRef<{ id: string; title: string; description: string } | null>(null);
   const nodeTypes = useMemo(() => ({ goalNode: GoalNode }), []);
   const edgeTypes = useMemo(() => ({ boundaryStraight: BoundaryStraightEdge }), []);
   const activeGoals = useMemo(
@@ -700,7 +866,7 @@ function GoalGraphClientInner({
     () =>
       nodes.map((node) => ({
         ...node,
-        selected: node.id === selectedGoalId,
+        selected: Boolean(node.selected) || node.id === selectedGoalId,
         hidden: query.length === 0 ? false : !matchesSearch(node.data.title),
         data: {
           ...node.data,
@@ -841,6 +1007,9 @@ function GoalGraphClientInner({
     [edges, isEditor, loadNext, withBoard],
   );
 
+  const updateGoalRef = useRef(updateGoal);
+  updateGoalRef.current = updateGoal;
+
   const deleteGoal = useCallback(async () => {
     if (!isEditor) {
       setError("У вас только read-only доступ к этой доске.");
@@ -923,18 +1092,21 @@ function GoalGraphClientInner({
     setSelectedGoalId(node.id);
   }, []);
 
-  const onNodeDragStop = useCallback(async (_: unknown, node: Node<GoalNodeData>) => {
-    if (!isEditor) return;
+  const onNodeDragStop = useCallback(
+    async (_event: ReactMouseEvent, node: Node<GoalNodeData>, draggedNodes: Node<GoalNodeData>[]) => {
+      if (!isEditor) return;
 
-    try {
-      await updateGoal(node.id, {
-        x: node.position.x,
-        y: node.position.y,
-      });
-    } catch {
-      setError("Failed to save node position");
-    }
-  }, [isEditor, updateGoal]);
+      const targets = draggedNodes.length > 0 ? draggedNodes : [node];
+
+      for (const n of targets) {
+        await updateGoal(n.id, {
+          x: n.position.x,
+          y: n.position.y,
+        });
+      }
+    },
+    [isEditor, updateGoal],
+  );
 
   const onEdgeDoubleClick = useCallback(async (_: unknown, edge: Edge) => {
     if (!isEditor) {
@@ -988,6 +1160,51 @@ function GoalGraphClientInner({
   const selectedPriority = selectedGoalNode?.data.priority ?? 3;
   const selectedType = selectedGoalNode?.data.type ?? "TASK";
 
+  useEffect(() => {
+    if (!selectedGoalNode) {
+      goalTextSyncedRef.current = null;
+      return;
+    }
+    goalTextSyncedRef.current = {
+      id: selectedGoalNode.id,
+      title: selectedGoalNode.data.title,
+      description: selectedGoalNode.data.description,
+    };
+  }, [selectedGoalNode?.id]);
+
+  useEffect(() => {
+    if (!selectedGoalId || !isEditor || !selectedGoalNode) return;
+    const synced = goalTextSyncedRef.current;
+    if (!synced || synced.id !== selectedGoalId) return;
+    if (selectedTitle === synced.title && selectedDescription === synced.description) return;
+
+    const timeoutId = window.setTimeout(() => {
+      const goalId = selectedGoalId;
+      const title = selectedTitle;
+      const description = selectedDescription;
+      void updateGoalRef.current(goalId, { title, description }).then(() => {
+        if (goalTextSyncedRef.current?.id !== goalId) return;
+        goalTextSyncedRef.current = { id: goalId, title, description };
+      });
+    }, 480);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [selectedTitle, selectedDescription, selectedGoalId, isEditor, selectedGoalNode]);
+
+  useEffect(() => {
+    const goalIdWhenFocused = selectedGoalId;
+
+    return () => {
+      if (!goalIdWhenFocused || !isEditor) return;
+      const node = nodesRef.current.find((n) => n.id === goalIdWhenFocused);
+      if (!node) return;
+      void updateGoalRef.current(goalIdWhenFocused, {
+        title: node.data.title,
+        description: node.data.description,
+      });
+    };
+  }, [selectedGoalId, isEditor]);
+
   const setNodeField = useCallback(
     (goalId: string, patch: Partial<GoalNodeData>) => {
       setNodes((prev) =>
@@ -1010,12 +1227,14 @@ function GoalGraphClientInner({
     [edges],
   );
 
-  const quickSetStatus = useCallback(
-    async (goalId: string, status: GoalStatus) => {
-      setNodeField(goalId, { status });
-      await updateGoal(goalId, { status });
+  const patchGoalMeta = useCallback(
+    async (patch: Partial<Pick<GoalNodeData, "status" | "priority" | "type">>) => {
+      if (!selectedGoalNode || !isEditor) return;
+      const goalId = selectedGoalNode.id;
+      setNodeField(goalId, patch);
+      await updateGoal(goalId, patch);
     },
-    [setNodeField, updateGoal],
+    [isEditor, selectedGoalNode, setNodeField, updateGoal],
   );
 
   const createBoard = useCallback(async (title: string) => {
@@ -1285,19 +1504,61 @@ function GoalGraphClientInner({
             <p>done</p>
           </div>
           {!isPublicView ? (
-            <div className="text-right">
-              <p className="max-w-40 truncate text-[#F2EEE6]">{currentUserEmail ?? "user"}</p>
-              <Link className="underline decoration-dotted" href="/api/auth/signout">
-                выйти
-              </Link>
+            <div className="relative" ref={userMenuRef}>
+              <button
+                type="button"
+                className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-white/15 bg-[#252825] text-sm font-semibold text-[#D8C8A8] transition hover:border-[#D39A43]/45 hover:bg-[#2E312F]"
+                aria-expanded={userMenuOpen}
+                aria-haspopup="menu"
+                title={currentUserEmail ?? "Профиль"}
+                onClick={() => setUserMenuOpen((open) => !open)}
+              >
+                {initialsFromEmail(currentUserEmail)}
+              </button>
+              {userMenuOpen ? (
+                <div
+                  role="menu"
+                  className="absolute right-0 top-full z-[400] mt-2 w-56 rounded-xl border border-white/10 bg-[#171918] py-2 shadow-[0_12px_40px_rgba(0,0,0,.5)]"
+                >
+                  <p className="border-b border-white/10 px-3 py-2 text-[10px] font-medium uppercase tracking-[0.06em] text-[#8A857B]">
+                    Аккаунт
+                  </p>
+                  <p className="break-all px-3 py-2 text-xs leading-snug text-[#D8C8A8]">{currentUserEmail}</p>
+                  <Link
+                    href="/api/auth/signout"
+                    role="menuitem"
+                    className="block px-3 py-2 text-sm text-[#F2EEE6] transition hover:bg-white/10"
+                    onClick={() => setUserMenuOpen(false)}
+                  >
+                    Выйти
+                  </Link>
+                </div>
+              ) : null}
             </div>
           ) : null}
         </div>
       </header>
 
-      <div className="flex min-h-0 flex-1">
-        <aside className="w-[300px] overflow-y-auto border-r border-white/10 bg-[#171918] p-4">
-          <div className="space-y-5">
+      <div className="relative flex min-h-0 flex-1">
+        {!leftSidebarOpen ? (
+          <button
+            type="button"
+            className="pointer-events-auto absolute left-0 top-1/2 z-20 flex h-16 w-4 -translate-y-1/2 items-center justify-center rounded-r-lg border border-l-0 border-white/10 bg-[#171918] text-[#B8B0A3] shadow-lg transition hover:bg-[#1D201E] hover:text-[#F2EEE6]"
+            aria-label="Показать левую панель"
+            onClick={() => setLeftSidebarOpen(true)}
+          >
+            <ChevronIcon direction="right" className="h-3 w-3" />
+          </button>
+        ) : null}
+
+        <aside
+          className={`relative shrink-0 overflow-hidden border-white/10 bg-[#171918] ${
+            leftSidebarOpen ? "w-[300px] border-r" : "w-0 border-0"
+          }`}
+        >
+          <div className="flex h-full min-h-0 w-[300px] flex-col">
+            <div className="min-h-0 flex-1 overflow-y-auto p-4">
+              <div className="space-y-5">
             <section>
               <div className="mb-2 flex items-center justify-between">
                 <h3 className="text-xs font-semibold uppercase tracking-[0.06em] text-[#8A857B]">В работе</h3>
@@ -1385,6 +1646,18 @@ function GoalGraphClientInner({
               </div>
             </section>
           </div>
+            </div>
+            <div className="flex shrink-0 justify-end border-t border-white/10 px-2 py-2">
+              <button
+                type="button"
+                className="grid h-8 w-8 place-items-center rounded-lg border border-transparent text-[#B8B0A3] transition hover:border-white/10 hover:bg-white/5 hover:text-[#F2EEE6]"
+                aria-label="Скрыть левую панель"
+                onClick={() => setLeftSidebarOpen(false)}
+              >
+                <ChevronIcon direction="left" />
+              </button>
+            </div>
+          </div>
         </aside>
 
         <section ref={flowSectionRef} className="goal-graph-flow relative h-full min-w-0 flex-1">
@@ -1449,7 +1722,13 @@ function GoalGraphClientInner({
           ) : null}
         </section>
 
-        <aside className="w-[340px] overflow-y-auto border-l border-white/10 bg-[#171918] px-4 py-5">
+        <aside
+          className={`relative shrink-0 overflow-hidden border-white/10 bg-[#171918] ${
+            rightSidebarOpen ? "w-[340px] border-l" : "w-0 border-0"
+          }`}
+        >
+          <div className="flex h-full min-h-0 w-[340px] flex-col">
+            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5">
           {!isPublicView && !selectedGoalNode ? (
             <div className="mb-4 space-y-2 rounded-xl border border-white/10 bg-[#1D201E] p-3 text-xs text-[#B8B0A3]">
               <div className="flex items-center justify-between">
@@ -1515,28 +1794,160 @@ function GoalGraphClientInner({
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <h2 className="text-2xl font-semibold text-[#F2EEE6]">{selectedTitle}</h2>
-                  <p className="mt-1 text-xs text-[#B8B0A3]">{typeLabel[selectedType]}</p>
                 </div>
                 <button
                   type="button"
-                  className="rounded-lg border border-white/10 px-2 py-1 text-xs text-[#B8B0A3] hover:bg-white/5"
+                  className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-white/10 text-lg leading-none text-[#B8B0A3] hover:bg-white/5 hover:text-[#F2EEE6]"
+                  aria-label="Закрыть"
                   onClick={() => setSelectedGoalId(null)}
                 >
-                  Закрыть
+                  <span aria-hidden>×</span>
                 </button>
               </div>
 
-              <div className="flex items-center justify-between rounded-xl border border-white/10 bg-[#1D201E] px-3 py-2">
-                <span className="text-xs text-[#B8B0A3]">Статус</span>
-                <span className="rounded-full border border-[#D39A43]/45 bg-[#D39A43]/12 px-2 py-0.5 text-xs text-[#D8C8A8]">
-                  {statusLabel[selectedStatus]}
-                </span>
+              <div ref={detailDropdownTriggersRef} className="space-y-2">
+                <button
+                  ref={detailStatusAnchorRef}
+                  type="button"
+                  disabled={!isEditor}
+                  aria-expanded={openDetailDropdown === "status"}
+                  aria-haspopup="listbox"
+                  className="flex w-full cursor-pointer items-center justify-between rounded-xl border border-white/10 bg-[#1D201E] px-3 py-2 text-left transition hover:bg-white/[0.04] disabled:pointer-events-none disabled:opacity-50"
+                  onClick={() =>
+                    setOpenDetailDropdown((open) => (open === "status" ? null : "status"))
+                  }
+                >
+                  <span className="text-xs text-[#B8B0A3]">Статус</span>
+                  <span className="flex items-center gap-2">
+                    <span className="rounded-full border border-[#D39A43]/45 bg-[#D39A43]/12 px-2 py-0.5 text-xs text-[#D8C8A8]">
+                      {statusLabel[selectedStatus]}
+                    </span>
+                    <span className="text-[10px] text-[#8A857B]" aria-hidden>
+                      ▾
+                    </span>
+                  </span>
+                </button>
+
+                <button
+                  ref={detailPriorityAnchorRef}
+                  type="button"
+                  disabled={!isEditor}
+                  aria-expanded={openDetailDropdown === "priority"}
+                  aria-haspopup="listbox"
+                  className="flex w-full cursor-pointer items-center justify-between rounded-xl border border-white/10 bg-[#1D201E] px-3 py-2 text-left transition hover:bg-white/[0.04] disabled:pointer-events-none disabled:opacity-50"
+                  onClick={() =>
+                    setOpenDetailDropdown((open) => (open === "priority" ? null : "priority"))
+                  }
+                >
+                  <span className="text-xs text-[#B8B0A3]">Приоритет</span>
+                  <span className="flex items-center gap-2">
+                    <span className={`text-sm font-medium ${priorityTone(selectedPriority)}`}>
+                      ⚑ {priorityLabel(selectedPriority)}
+                    </span>
+                    <span className="text-[10px] text-[#8A857B]" aria-hidden>
+                      ▾
+                    </span>
+                  </span>
+                </button>
+
+                <button
+                  ref={detailTypeAnchorRef}
+                  type="button"
+                  disabled={!isEditor}
+                  aria-expanded={openDetailDropdown === "type"}
+                  aria-haspopup="listbox"
+                  className="flex w-full cursor-pointer items-center justify-between rounded-xl border border-white/10 bg-[#1D201E] px-3 py-2 text-left transition hover:bg-white/[0.04] disabled:pointer-events-none disabled:opacity-50"
+                  onClick={() =>
+                    setOpenDetailDropdown((open) => (open === "type" ? null : "type"))
+                  }
+                >
+                  <span className="text-xs text-[#B8B0A3]">Тип</span>
+                  <span className="flex items-center gap-2">
+                    <span className="text-sm font-medium text-[#D8C8A8]">{typeLabel[selectedType]}</span>
+                    <span className="text-[10px] text-[#8A857B]" aria-hidden>
+                      ▾
+                    </span>
+                  </span>
+                </button>
               </div>
 
-              <div className="rounded-xl border border-white/10 bg-[#1D201E] px-3 py-2">
-                <p className="text-[11px] text-[#8A857B]">Приоритет</p>
-                <p className={`mt-1 text-sm ${priorityTone(selectedPriority)}`}>⚑ {priorityLabel(selectedPriority)}</p>
-              </div>
+              {openDetailDropdown && detailMenuBox
+                ? createPortal(
+                    <div
+                      ref={detailDropdownMenuRef}
+                      role="listbox"
+                      className="fixed z-[300] overflow-hidden rounded-xl border border-white/10 bg-[#161918] py-1 shadow-[0_12px_40px_rgba(0,0,0,.45)]"
+                      style={{
+                        top: detailMenuBox.top,
+                        left: detailMenuBox.left,
+                        width: Math.max(detailMenuBox.width, 220),
+                      }}
+                    >
+                      {openDetailDropdown === "status"
+                        ? statusOptions.map((status) => (
+                            <button
+                              key={status}
+                              type="button"
+                              role="option"
+                              aria-selected={status === selectedStatus}
+                              className={`flex w-full px-3 py-2 text-left text-sm transition ${
+                                status === selectedStatus
+                                  ? "bg-[#D39A43]/14 text-[#F2EEE6]"
+                                  : "text-[#D8C8A8] hover:bg-white/10"
+                              }`}
+                              onClick={() => {
+                                void patchGoalMeta({ status });
+                                setOpenDetailDropdown(null);
+                              }}
+                            >
+                              {statusLabel[status]}
+                            </button>
+                          ))
+                        : openDetailDropdown === "priority"
+                          ? [1, 2, 3, 4, 5].map((priority) => (
+                              <button
+                                key={priority}
+                                type="button"
+                                role="option"
+                                aria-selected={priority === selectedPriority}
+                                className={`flex w-full px-3 py-2 text-left text-sm transition ${
+                                  priority === selectedPriority
+                                    ? "bg-[#D39A43]/14 text-[#F2EEE6]"
+                                    : "text-[#D8C8A8] hover:bg-white/10"
+                                }`}
+                                onClick={() => {
+                                  void patchGoalMeta({ priority });
+                                  setOpenDetailDropdown(null);
+                                }}
+                              >
+                                <span className={priorityTone(priority)}>
+                                  ⚑ {priority} — {priorityLabel(priority)}
+                                </span>
+                              </button>
+                            ))
+                          : typeOptions.map((type) => (
+                              <button
+                                key={type}
+                                type="button"
+                                role="option"
+                                aria-selected={type === selectedType}
+                                className={`flex w-full px-3 py-2 text-left text-sm transition ${
+                                  type === selectedType
+                                    ? "bg-[#D39A43]/14 text-[#F2EEE6]"
+                                    : "text-[#D8C8A8] hover:bg-white/10"
+                                }`}
+                                onClick={() => {
+                                  void patchGoalMeta({ type });
+                                  setOpenDetailDropdown(null);
+                                }}
+                              >
+                                {typeLabel[type]}
+                              </button>
+                            ))}
+                    </div>,
+                    document.body,
+                  )
+                : null}
 
               <label className="block text-xs text-[#B8B0A3]">
                 Название
@@ -1559,104 +1970,6 @@ function GoalGraphClientInner({
                   }
                 />
               </label>
-
-              <div className="grid grid-cols-2 gap-2">
-                <label className="block text-xs text-[#B8B0A3]">
-                  Тип
-                  <select
-                    className="mt-1 h-10 w-full rounded-xl border border-white/10 bg-[#181B1A] px-2 text-sm text-[#F2EEE6] outline-none focus:border-[#D39A43]/45"
-                    value={selectedType}
-                    disabled={!isEditor}
-                    onChange={(event) =>
-                      setNodeField(selectedGoalNode.id, { type: event.target.value as GoalType })
-                    }
-                  >
-                    {typeOptions.map((type) => (
-                      <option key={type} value={type}>
-                        {typeLabel[type]}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-
-                <label className="block text-xs text-[#B8B0A3]">
-                  Статус
-                  <select
-                    className="mt-1 h-10 w-full rounded-xl border border-white/10 bg-[#181B1A] px-2 text-sm text-[#F2EEE6] outline-none focus:border-[#D39A43]/45"
-                    value={selectedStatus}
-                    disabled={!isEditor}
-                    onChange={(event) =>
-                      setNodeField(selectedGoalNode.id, { status: event.target.value as GoalStatus })
-                    }
-                  >
-                    {statusOptions.map((status) => (
-                      <option key={status} value={status}>
-                        {statusLabel[status]}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-
-              <label className="block text-xs text-[#B8B0A3]">
-                Приоритет (1..5)
-                <input
-                  type="number"
-                  min={1}
-                  max={5}
-                  className="mt-1 h-10 w-full rounded-xl border border-white/10 bg-[#181B1A] px-3 text-sm text-[#F2EEE6] outline-none focus:border-[#D39A43]/45"
-                  value={selectedPriority}
-                  disabled={!isEditor}
-                  onChange={(event) =>
-                    setNodeField(selectedGoalNode.id, {
-                      priority: Math.min(5, Math.max(1, Number(event.target.value || 3))),
-                    })
-                  }
-                />
-              </label>
-
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  className="h-10 rounded-xl bg-[#B96745] text-sm font-medium text-[#F2EEE6] hover:bg-[#C47657] disabled:opacity-50"
-                  disabled={!isEditor}
-                  onClick={() =>
-                    void updateGoal(selectedGoalNode.id, {
-                      title: selectedTitle,
-                      description: selectedDescription,
-                      type: selectedType,
-                      status: selectedStatus,
-                      priority: selectedPriority,
-                    })
-                  }
-                >
-                  Сохранить
-                </button>
-                <button
-                  type="button"
-                  className="h-10 rounded-xl bg-[#8B944C]/35 text-sm text-[#DCE6AA] hover:bg-[#8B944C]/45 disabled:opacity-50"
-                  disabled={!isEditor}
-                  onClick={() => void quickSetStatus(selectedGoalNode.id, "DONE")}
-                >
-                  Отметить done
-                </button>
-                <button
-                  type="button"
-                  className="h-10 rounded-xl bg-[#D39A43]/30 text-sm text-[#E6CA96] hover:bg-[#D39A43]/40 disabled:opacity-50"
-                  disabled={!isEditor}
-                  onClick={() => void quickSetStatus(selectedGoalNode.id, "ACTIVE")}
-                >
-                  В работу
-                </button>
-                <button
-                  type="button"
-                  className="h-10 rounded-xl bg-[#A94F3D]/30 text-sm text-[#F0B0A0] hover:bg-[#A94F3D]/40 disabled:opacity-50"
-                  disabled={!isEditor}
-                  onClick={() => void quickSetStatus(selectedGoalNode.id, "DROPPED")}
-                >
-                  Отменить
-                </button>
-              </div>
 
               <button
                 type="button"
@@ -1688,7 +2001,30 @@ function GoalGraphClientInner({
               Выберите цель на графе, чтобы открыть детали. Двойной клик по связи удаляет зависимость.
             </div>
           )}
+            </div>
+            <div className="flex shrink-0 justify-start border-t border-white/10 px-2 py-2">
+              <button
+                type="button"
+                className="grid h-8 w-8 place-items-center rounded-lg border border-transparent text-[#B8B0A3] transition hover:border-white/10 hover:bg-white/5 hover:text-[#F2EEE6]"
+                aria-label="Скрыть правую панель"
+                onClick={() => setRightSidebarOpen(false)}
+              >
+                <ChevronIcon direction="right" />
+              </button>
+            </div>
+          </div>
         </aside>
+
+        {!rightSidebarOpen ? (
+          <button
+            type="button"
+            className="pointer-events-auto absolute right-0 top-1/2 z-20 flex h-16 w-4 -translate-y-1/2 items-center justify-center rounded-l-lg border border-r-0 border-white/10 bg-[#171918] text-[#B8B0A3] shadow-lg transition hover:bg-[#1D201E] hover:text-[#F2EEE6]"
+            aria-label="Показать правую панель"
+            onClick={() => setRightSidebarOpen(true)}
+          >
+            <ChevronIcon direction="left" className="h-3 w-3" />
+          </button>
+        ) : null}
       </div>
 
       {boardModalMode ? (
