@@ -38,6 +38,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type SetStateAction,
@@ -129,7 +130,12 @@ type AlignGoalsMode =
 
 /** Совпадает с шириной левой колонки (`w-[300px]`); нужна для сдвига viewport при сворачивании. */
 const LEFT_SIDEBAR_WIDTH_PX = 300;
-const EDGE_STROKE = "rgba(216,200,168,.42)";
+/** Единственная «яркая» линия: от цели-источника в состоянии DONE (непрозрачный цвет — линии не просвечивают). */
+const EDGE_STROKE_FROM_DONE = "#A8BE7A";
+/** Все остальные линии (источник ещё не DONE): чуть светлее тёмно-серый, без альфы. */
+const EDGE_STROKE_MUTED = "#443F3B";
+/** Выбранное ребро. */
+const EDGE_STROKE_SELECTED = "#E8DCC4";
 const EDGE_WIDTH = 1.2;
 const EDGE_HIT_WIDTH = EDGE_WIDTH + 4;
 const EDGE_ARROW_LENGTH = 12;
@@ -140,6 +146,12 @@ const EDGE_MID_HANDLE_RADIUS = 4;
 const EDGE_MIN_SEGMENT_FOR_MID_HANDLE = 40;
 /** Радиус скругления углов полилинии (дуги окружности вместо Bézier). */
 const EDGE_CORNER_RADIUS = 52;
+
+function strokeForDependencyEdge(sourceComputed: ComputedState | undefined, selected: boolean): string {
+  if (selected) return EDGE_STROKE_SELECTED;
+  if (sourceComputed === "DONE") return EDGE_STROKE_FROM_DONE;
+  return EDGE_STROKE_MUTED;
+}
 
 type XY = { x: number; y: number };
 
@@ -498,6 +510,23 @@ function getStraightArrowHeadPath(start: XY, end: XY) {
   return getArrowHeadPath(end, { x: ux, y: uy });
 }
 
+/** Полилиния для штриха: последняя точка — середина наконечника (линия не заходит под остриё). */
+function shortenChainEndAtArrowMid(vertexChain: XY[]): XY[] {
+  if (vertexChain.length < 2) return vertexChain;
+  const tip = vertexChain[vertexChain.length - 1]!;
+  const prev = vertexChain[vertexChain.length - 2]!;
+  const dx = tip.x - prev.x;
+  const dy = tip.y - prev.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const halfArrow = EDGE_ARROW_LENGTH / 2;
+  const back = Math.min(halfArrow, Math.max(0, len - 0.75));
+  if (back <= 1e-9) return vertexChain;
+  const ux = dx / len;
+  const uy = dy / len;
+  const lineEnd = { x: tip.x - ux * back, y: tip.y - uy * back };
+  return [...vertexChain.slice(0, -1), lineEnd];
+}
+
 type BoundaryEdgeFlowData = {
   waypoints?: EdgeWaypoint[];
 };
@@ -580,10 +609,25 @@ function BoundaryStraightEdge({
     return [geometry.sourcePoint, ...displayWaypoints, geometry.targetPoint];
   }, [geometry, displayWaypoints]);
 
+  const vertexChainForStroke = useMemo(
+    () => shortenChainEndAtArrowMid(vertexChain),
+    [vertexChain],
+  );
+
   const curve = useMemo(() => {
-    if (vertexChain.length < 2) return null;
-    return roundedPolylinePath(vertexChain, EDGE_CORNER_RADIUS);
-  }, [vertexChain]);
+    if (vertexChainForStroke.length < 2) return null;
+    return roundedPolylinePath(vertexChainForStroke, EDGE_CORNER_RADIUS);
+  }, [vertexChainForStroke]);
+
+  const arrowHeadPath = useMemo(() => {
+    if (!geometry || vertexChain.length < 2) return "";
+    const tip = geometry.targetPoint;
+    const prev = vertexChain[vertexChain.length - 2]!;
+    const dx = tip.x - prev.x;
+    const dy = tip.y - prev.y;
+    const len = Math.hypot(dx, dy) || 1;
+    return getArrowHeadPath(tip, { x: dx / len, y: dy / len });
+  }, [geometry, vertexChain]);
 
   const stopDragListeners = useCallback(() => {
     dragCleanupRef.current?.();
@@ -677,17 +721,18 @@ function BoundaryStraightEdge({
     return handles;
   }, [displayWaypoints.length, showWaypointHandles, vertexChain]);
 
+  const sourceComputed = (sourceNode?.data as GoalNodeData | undefined)?.computedState;
+  const strokeColor = useMemo(
+    () => strokeForDependencyEdge(sourceComputed, Boolean(selected)),
+    [selected, sourceComputed],
+  );
+
   if (!geometry || !curve) return null;
 
   const { sourcePoint, targetPoint } = geometry;
   const edgePath = curve.d;
-  const arrowPath =
-    curve.endTangent != null
-      ? getArrowHeadPath(targetPoint, curve.endTangent)
-      : getStraightArrowHeadPath(sourcePoint, targetPoint);
 
   const strokeW = selected ? EDGE_WIDTH * 1.85 : EDGE_WIDTH;
-  const strokeColor = selected ? "rgba(228,212,182,.72)" : EDGE_STROKE;
 
   return (
     <g data-id={id}>
@@ -698,15 +743,21 @@ function BoundaryStraightEdge({
         strokeWidth={EDGE_HIT_WIDTH}
         pointerEvents="stroke"
       />
-      <path d={edgePath} fill="none" stroke={strokeColor} strokeWidth={strokeW} style={style} />
       <path
-        d={arrowPath}
+        d={edgePath}
+        fill="none"
+        stroke={strokeColor}
+        strokeWidth={strokeW}
+        style={{ ...(style as CSSProperties | undefined), stroke: strokeColor, strokeWidth: strokeW }}
+      />
+      <path
+        d={arrowHeadPath}
         fill="rgba(0,0,0,0.001)"
         stroke="rgba(0,0,0,0.001)"
         strokeWidth={4}
         pointerEvents="all"
       />
-      <path d={arrowPath} fill={strokeColor} />
+      <path d={arrowHeadPath} fill={strokeColor} style={{ fill: strokeColor }} />
 
       {showWaypointHandles
         ? displayWaypoints.map((wp, index) => (
@@ -818,10 +869,10 @@ function BoundaryConnectionLine({
       <path
         d={`M ${sourceAnchor.x} ${sourceAnchor.y} L ${targetAnchor.x} ${targetAnchor.y}`}
         fill="none"
-        stroke={EDGE_STROKE}
+        stroke={EDGE_STROKE_MUTED}
         strokeWidth={EDGE_WIDTH}
       />
-      <path d={arrowPath} fill={EDGE_STROKE} />
+      <path d={arrowPath} fill={EDGE_STROKE_MUTED} />
     </g>
   );
 }
@@ -860,7 +911,11 @@ function GoalNode({ data, selected }: NodeProps<Node<GoalNodeData>>) {
       className={`relative min-h-24 min-w-64 rounded-2xl border px-4 py-3 shadow-[0_12px_28px_rgba(0,0,0,.25)] transition ${
         isDone
           ? "border-[#4D6A40]/45 bg-[#0F150F] opacity-[0.88] saturate-[0.85] shadow-[0_8px_20px_rgba(40,80,40,0.12)]"
-          : `${tone.border} ${tone.card} ${isDimmed ? "opacity-[0.64] saturate-[0.58]" : ""}`
+          : `${tone.border} ${tone.card} ${
+              isDimmed
+                ? "!border-white/[0.07] !bg-[#121413] shadow-[0_10px_28px_rgba(0,0,0,0.48)]"
+                : ""
+            }`
       } ${
         selected ? "ring-1 ring-[#D39A43] shadow-[0_0_0_1px_rgba(211,154,67,.7),0_0_28px_rgba(211,154,67,.16)]" : ""
       }`}
@@ -932,11 +987,15 @@ function GoalNode({ data, selected }: NodeProps<Node<GoalNodeData>>) {
       <div className="relative z-10 flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p
-            className={`truncate text-[15px] font-semibold ${isDone ? "text-[#B8C9A8]" : "text-[#F2EEE6]"}`}
+            className={`truncate text-[15px] font-semibold ${
+              isDone ? "text-[#B8C9A8]" : isDimmed ? "text-[#BAB3A8]" : "text-[#F2EEE6]"
+            }`}
           >
             {data.title || "Untitled goal"}
           </p>
-          <p className={`mt-1 text-[11px] ${isDone ? "text-[#7A8B6C]" : "text-[#B8B0A3]"}`}>
+          <p
+            className={`mt-1 text-[11px] ${isDone ? "text-[#7A8B6C]" : isDimmed ? "text-[#6E6A62]" : "text-[#B8B0A3]"}`}
+          >
             {typeLabel[data.type]}
           </p>
         </div>
@@ -2948,7 +3007,7 @@ function GoalGraphClientInner({
             }}
             defaultEdgeOptions={{
               type: "boundaryStraight",
-              style: { stroke: EDGE_STROKE, strokeWidth: EDGE_WIDTH },
+              style: { stroke: EDGE_STROKE_MUTED, strokeWidth: EDGE_WIDTH },
               data: { waypoints: [] },
               selectable: isEditor,
             }}
