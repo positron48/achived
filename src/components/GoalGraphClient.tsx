@@ -8,6 +8,7 @@ import {
   type ConnectionLineComponentProps,
   ConnectionLineType,
   type Connection,
+  ControlButton,
   Controls,
   type EdgeProps,
   getStraightPath,
@@ -67,6 +68,38 @@ type MemberRole = "VIEWER" | "EDITOR";
 
 const DEFAULT_NODE_WIDTH = 256;
 const DEFAULT_NODE_HEIGHT = 96;
+
+/** Совпадает с `gap` у `<Background />`: верхний левый угол узла притягивается к узлам этой сетки. */
+const BACKGROUND_GRID_GAP = 24;
+
+function measuredGoalNodeSize(node: Node<GoalNodeData>): { width: number; height: number } {
+  const width =
+    typeof node.measured?.width === "number"
+      ? node.measured.width
+      : typeof node.width === "number"
+        ? node.width
+        : DEFAULT_NODE_WIDTH;
+  const height =
+    typeof node.measured?.height === "number"
+      ? node.measured.height
+      : typeof node.height === "number"
+        ? node.height
+        : DEFAULT_NODE_HEIGHT;
+  return { width, height };
+}
+
+function snapFlowTopLeftToGrid(pos: { x: number; y: number }): { x: number; y: number } {
+  const g = BACKGROUND_GRID_GAP;
+  return {
+    x: g * Math.round(pos.x / g),
+    y: g * Math.round(pos.y / g),
+  };
+}
+
+type AlignGoalsMode =
+  | { layout: "row" }
+  | { layout: "column"; edge: "left" | "center" | "right" };
+
 /** Совпадает с шириной левой колонки (`w-[300px]`); нужна для сдвига viewport при сворачивании. */
 const LEFT_SIDEBAR_WIDTH_PX = 300;
 const EDGE_STROKE = "rgba(216,200,168,.42)";
@@ -553,6 +586,26 @@ function buildFlowNodes(goals: ApiGoal[], edges: ApiEdge[]) {
   return applyComputedStates(baseNodes, flowEdges);
 }
 
+/** Иконка «magnet» из Lucide Icons (ISC); подгонена под stroke-панель React Flow. */
+function MagnetToolbarIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden
+    >
+      <path d="m12 15 4 4" />
+      <path d="M2.352 10.648a1.205 1.205 0 0 0 0 1.704l2.296 2.296a1.205 1.205 0 0 0 1.704 0l6.029-6.029a1 1 0 1 1 3 3l-6.029 6.029a1.205 1.205 0 0 0 0 1.704l2.296 2.296a1.205 1.205 0 0 0 1.704 0l6.365-6.367A1 1 0 0 0 8.716 4.282z" />
+      <path d="m5 8 4 4" />
+    </svg>
+  );
+}
+
 function ChevronIcon({
   direction,
   className = "h-4 w-4",
@@ -638,6 +691,13 @@ type GoalGraphClientInnerProps = {
 
 type FlowContextMenuState =
   | { kind: "node"; clientX: number; clientY: number; nodeId: string }
+  | {
+      /** ПКМ по оверлею мультивыделения (`NodesSelection`), а не по самому узлу */
+      kind: "selection";
+      clientX: number;
+      clientY: number;
+      anchorNodeId: string;
+    }
   | { kind: "pane"; clientX: number; clientY: number; flowX: number; flowY: number };
 
 function GoalGraphClientInner({
@@ -690,6 +750,7 @@ function GoalGraphClientInner({
   const [flowContextMenu, setFlowContextMenu] = useState<FlowContextMenuState | null>(null);
   const flowContextMenuRef = useRef<HTMLDivElement | null>(null);
   const prevLeftSidebarOpenRef = useRef(leftSidebarOpen);
+  const [gridSnapEnabled, setGridSnapEnabled] = useState(false);
 
   useLayoutEffect(() => {
     const prev = prevLeftSidebarOpenRef.current;
@@ -1146,6 +1207,39 @@ function GoalGraphClientInner({
     [isEditor, isPublicView],
   );
 
+  const onSelectionContextMenu = useCallback(
+    (event: ReactMouseEvent, selectedNodes: Node<GoalNodeData>[]) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!isEditor || isPublicView) return;
+      if (selectedNodes.length < 2) return;
+
+      const flowPoint = reactFlow.screenToFlowPosition({
+        x: event.clientX,
+        y: event.clientY,
+      });
+
+      let anchorNodeId = selectedNodes[0]!.id;
+      for (const n of selectedNodes) {
+        const { width: w, height: h } = measuredGoalNodeSize(n);
+        const { x, y } = n.position;
+        if (flowPoint.x >= x && flowPoint.x <= x + w && flowPoint.y >= y && flowPoint.y <= y + h) {
+          anchorNodeId = n.id;
+          break;
+        }
+      }
+
+      setFlowContextMenu({
+        kind: "selection",
+        clientX: event.clientX,
+        clientY: event.clientY,
+        anchorNodeId,
+      });
+      setSelectedGoalId(anchorNodeId);
+    },
+    [isEditor, isPublicView, reactFlow],
+  );
+
   const onPaneContextMenu = useCallback(
     (event: ReactMouseEvent | globalThis.MouseEvent) => {
       event.preventDefault();
@@ -1328,6 +1422,101 @@ function GoalGraphClientInner({
     [deleteGoalById],
   );
 
+  const alignSelectedGoalsFromContextMenu = useCallback(
+    async (mode: AlignGoalsMode, anchorNodeId: string) => {
+      const currentNodes = nodesRef.current;
+      const ids = currentNodes.filter((n) => n.selected).map((n) => n.id);
+      if (ids.length < 2) return;
+
+      const anchor =
+        currentNodes.find((n) => n.id === anchorNodeId && ids.includes(n.id)) ??
+        currentNodes.find((n) => ids.includes(n.id));
+      if (!anchor) return;
+
+      setFlowContextMenu(null);
+
+      const { width: anchorW } = measuredGoalNodeSize(anchor);
+      const ax = anchor.position.x;
+      const ay = anchor.position.y;
+
+      for (const id of ids) {
+        const n = nodesRef.current.find((node) => node.id === id);
+        if (!n) continue;
+
+        const { width: w } = measuredGoalNodeSize(n);
+
+        let patch: { x?: number; y?: number } = {};
+
+        if (mode.layout === "row") {
+          if (Math.abs(n.position.y - ay) > 0.5) patch.y = ay;
+        } else {
+          let nextX = ax;
+          if (mode.edge === "center") nextX = ax + anchorW / 2 - w / 2;
+          if (mode.edge === "right") nextX = ax + anchorW - w;
+          if (Math.abs(n.position.x - nextX) > 0.5) patch.x = nextX;
+        }
+
+        if (patch.x !== undefined || patch.y !== undefined) {
+          await updateGoal(id, patch);
+        }
+      }
+    },
+    [updateGoal],
+  );
+
+  const snapSelectedGoalsToGridFromContextMenu = useCallback(async () => {
+    const ids = nodesRef.current.filter((n) => n.selected).map((n) => n.id);
+    if (ids.length < 2) return;
+
+    setFlowContextMenu(null);
+
+    if (!isEditor) {
+      setError("У вас только read-only доступ к этой доске.");
+      return;
+    }
+
+    for (const id of ids) {
+      const n = nodesRef.current.find((node) => node.id === id);
+      if (!n) continue;
+      const snapped = snapFlowTopLeftToGrid(n.position);
+      if (Math.abs(snapped.x - n.position.x) > 0.5 || Math.abs(snapped.y - n.position.y) > 0.5) {
+        await updateGoal(id, { x: snapped.x, y: snapped.y });
+      }
+    }
+  }, [isEditor, updateGoal]);
+
+  const deleteMultipleGoalsFromContextMenu = useCallback(async () => {
+    const ids = nodesRef.current.filter((n) => n.selected).map((n) => n.id);
+    if (ids.length < 2) return;
+
+    setFlowContextMenu(null);
+
+    if (!isEditor) {
+      setError("У вас только read-only доступ к этой доске.");
+      return;
+    }
+    if (!window.confirm(`Удалить выбранные цели (${ids.length}) и связанные связи?`)) return;
+
+    setError(null);
+
+    try {
+      await Promise.all(
+        ids.map((id) =>
+          fetch(withBoard(`/api/goals/${id}`), { method: "DELETE" }).then((response) => {
+            if (!response.ok) throw new Error("Failed to delete goal");
+          }),
+        ),
+      );
+      const idSet = new Set(ids);
+      setNodes((prev) => prev.filter((node) => !idSet.has(node.id)));
+      setEdges((prev) => prev.filter((edge) => !idSet.has(edge.source) && !idSet.has(edge.target)));
+      setSelectedGoalId((prev) => (prev && idSet.has(prev) ? null : prev));
+      void loadNext();
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : "Failed to delete goals");
+    }
+  }, [isEditor, loadNext, withBoard]);
+
   const createBoard = useCallback(async (title: string) => {
     try {
       const response = await fetch("/api/boards", {
@@ -1500,6 +1689,22 @@ function GoalGraphClientInner({
       setError(publicError instanceof Error ? publicError.message : "Failed to update public share");
     }
   }, [canManageShare, currentBoardId, publicShareToken]);
+
+  const flowMultiSelectedIds =
+    flowContextMenu?.kind === "node" || flowContextMenu?.kind === "selection"
+      ? nodes.filter((n) => n.selected).map((n) => n.id)
+      : [];
+  const showMultiGoalContextMenu =
+    flowContextMenu?.kind === "selection" ||
+    (flowContextMenu?.kind === "node" &&
+      flowMultiSelectedIds.length >= 2 &&
+      flowMultiSelectedIds.includes(flowContextMenu.nodeId));
+  const multiGoalContextMenuAnchorId =
+    flowContextMenu?.kind === "selection"
+      ? flowContextMenu.anchorNodeId
+      : flowContextMenu?.kind === "node"
+        ? flowContextMenu.nodeId
+        : "";
 
   return (
     <div className="flex h-full w-full flex-col bg-[#101211] text-[#F2EEE6]">
@@ -1776,6 +1981,7 @@ function GoalGraphClientInner({
             onConnectEnd={onConnectEnd}
             onEdgeDoubleClick={onEdgeDoubleClick}
             onNodeContextMenu={onNodeContextMenu}
+            onSelectionContextMenu={onSelectionContextMenu}
             onPaneContextMenu={onPaneContextMenu}
             onPaneClick={() => {
               setSelectedGoalId(null);
@@ -1787,9 +1993,11 @@ function GoalGraphClientInner({
             }}
             nodesDraggable={isEditor}
             nodesConnectable={isEditor}
+            snapToGrid={isEditor && gridSnapEnabled}
+            snapGrid={[BACKGROUND_GRID_GAP, BACKGROUND_GRID_GAP]}
             fitView
           >
-            <Background gap={24} size={1} color="rgba(216, 200, 168, 0.3)" />
+            <Background gap={BACKGROUND_GRID_GAP} size={1} color="rgba(216, 200, 168, 0.3)" />
             <MiniMap
               pannable
               zoomable
@@ -1811,7 +2019,29 @@ function GoalGraphClientInner({
                 return "#6E6A60";
               }}
             />
-            <Controls position="bottom-left" showInteractive={false} />
+            <Controls position="bottom-left" showInteractive={false}>
+              {isEditor ? (
+                <ControlButton
+                  onClick={() => setGridSnapEnabled((previous) => !previous)}
+                  title={
+                    gridSnapEnabled
+                      ? "Отключить прилипание к точкам сетки"
+                      : "Прилипание к точкам сетки при перетаскивании"
+                  }
+                  aria-label={
+                    gridSnapEnabled
+                      ? "Отключить прилипание к точкам сетки"
+                      : "Включить прилипание к точкам сетки"
+                  }
+                  aria-pressed={gridSnapEnabled}
+                  className={
+                    gridSnapEnabled ? "!bg-[#D39A43]/22 text-[#F2EEE6] hover:!bg-[#D39A43]/30" : undefined
+                  }
+                >
+                  <MagnetToolbarIcon className="h-[18px] w-[18px]" />
+                </ControlButton>
+              ) : null}
+            </Controls>
           </ReactFlow>
           {isLoading ? (
             <div className="absolute bottom-4 left-4 z-10 text-xs text-[#8A857B]">Загрузка...</div>
@@ -2128,14 +2358,104 @@ function GoalGraphClientInner({
             <div
               ref={flowContextMenuRef}
               role="menu"
-              className="fixed z-[600] max-h-[min(420px,calc(100vh-16px))] min-w-[208px] overflow-y-auto overflow-x-hidden rounded-xl border border-white/10 bg-[#171918] py-1 shadow-[0_16px_48px_rgba(0,0,0,.55)]"
+              className="fixed z-[600] max-h-[min(480px,calc(100vh-16px))] min-w-[208px] overflow-y-auto overflow-x-hidden rounded-xl border border-white/10 bg-[#171918] py-1 shadow-[0_16px_48px_rgba(0,0,0,.55)]"
               style={{
                 left: Math.min(globalThis.window.innerWidth - 216, Math.max(8, flowContextMenu.clientX)),
                 top: Math.min(globalThis.window.innerHeight - 48, Math.max(8, flowContextMenu.clientY)),
               }}
               onContextMenu={(event) => event.preventDefault()}
             >
-              {flowContextMenu.kind === "node" ? (
+              {flowContextMenu.kind === "pane" ? (
+                <>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="flex w-full px-3 py-2 text-left text-sm text-[#D8C8A8] hover:bg-white/10"
+                    onClick={() => {
+                      const pos = flowContextMenu;
+                      setFlowContextMenu(null);
+                      void createGoalWithPosition(pos.flowX, pos.flowY);
+                    }}
+                  >
+                    Добавить карточку
+                  </button>
+                </>
+              ) : showMultiGoalContextMenu ? (
+                <>
+                  <p className="border-b border-white/10 px-3 py-2 text-[10px] font-medium uppercase tracking-[0.06em] text-[#8A857B]">
+                    Выравнивание
+                  </p>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="flex w-full px-3 py-2 text-left text-sm text-[#D8C8A8] hover:bg-white/10"
+                    onClick={() =>
+                      void alignSelectedGoalsFromContextMenu({ layout: "row" }, multiGoalContextMenuAnchorId)
+                    }
+                  >
+                    В ряд (одна линия)
+                  </button>
+                  <p className="border-t border-white/10 px-3 pb-1 pt-3 text-[10px] font-medium uppercase tracking-[0.06em] text-[#6F6A62]">
+                    В колонку
+                  </p>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="flex w-full px-3 py-2 text-left text-sm text-[#D8C8A8] hover:bg-white/10"
+                    onClick={() =>
+                      void alignSelectedGoalsFromContextMenu(
+                        { layout: "column", edge: "left" },
+                        multiGoalContextMenuAnchorId,
+                      )
+                    }
+                  >
+                    Левый край
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="flex w-full px-3 py-2 text-left text-sm text-[#D8C8A8] hover:bg-white/10"
+                    onClick={() =>
+                      void alignSelectedGoalsFromContextMenu(
+                        { layout: "column", edge: "center" },
+                        multiGoalContextMenuAnchorId,
+                      )
+                    }
+                  >
+                    По центру по горизонтали
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="flex w-full px-3 py-2 text-left text-sm text-[#D8C8A8] hover:bg-white/10"
+                    onClick={() =>
+                      void alignSelectedGoalsFromContextMenu(
+                        { layout: "column", edge: "right" },
+                        multiGoalContextMenuAnchorId,
+                      )
+                    }
+                  >
+                    Правый край
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="flex w-full px-3 py-2 text-left text-sm text-[#D8C8A8] hover:bg-white/10"
+                    onClick={() => void snapSelectedGoalsToGridFromContextMenu()}
+                  >
+                    Выровнять по сетке
+                  </button>
+                  <div className="my-1 border-t border-white/10" />
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="flex w-full px-3 py-2 text-left text-sm text-[#F0B0A0] hover:bg-[#A94F3D]/20"
+                    onClick={() => void deleteMultipleGoalsFromContextMenu()}
+                  >
+                    Удалить выбранные ({flowMultiSelectedIds.length})
+                  </button>
+                </>
+              ) : flowContextMenu.kind === "node" ? (
                 <>
                   <p className="border-b border-white/10 px-3 py-2 text-[10px] font-medium uppercase tracking-[0.06em] text-[#8A857B]">
                     Статус
@@ -2169,22 +2489,7 @@ function GoalGraphClientInner({
                     Удалить карточку
                   </button>
                 </>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className="flex w-full px-3 py-2 text-left text-sm text-[#D8C8A8] hover:bg-white/10"
-                    onClick={() => {
-                      const pos = flowContextMenu;
-                      setFlowContextMenu(null);
-                      void createGoalWithPosition(pos.flowX, pos.flowY);
-                    }}
-                  >
-                    Добавить карточку
-                  </button>
-                </>
-              )}
+              ) : null}
             </div>,
             document.body,
           )
