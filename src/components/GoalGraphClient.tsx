@@ -27,11 +27,15 @@ import {
   type OnConnect,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { useCallback, useMemo, useRef, useState } from "react";
+import Link from "next/link";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type {
   ApiEdge,
   ApiGoal,
+  BoardMemberItem,
+  BoardRole,
+  BoardSummary,
   ComputedState,
   GoalStatus,
   GoalType,
@@ -48,6 +52,9 @@ type GoalNodeData = {
   computedState: ComputedState;
   isConnecting: boolean;
 };
+
+type BoardModalMode = "create" | "rename";
+type MemberRole = "VIEWER" | "EDITOR";
 
 const DEFAULT_NODE_WIDTH = 256;
 const DEFAULT_NODE_HEIGHT = 96;
@@ -533,6 +540,32 @@ function buildFlowNodes(goals: ApiGoal[], edges: ApiEdge[]) {
   return applyComputedStates(baseNodes, flowEdges);
 }
 
+type ModalProps = {
+  title: string;
+  onClose: () => void;
+  children: React.ReactNode;
+};
+
+function Modal({ title, onClose, children }: ModalProps) {
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/55 px-4">
+      <div className="w-full max-w-lg rounded-2xl border border-white/10 bg-[#171918] p-5 shadow-2xl">
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-lg font-semibold text-[#F2EEE6]">{title}</h3>
+          <button
+            type="button"
+            className="rounded-lg border border-white/10 px-2 py-1 text-xs text-[#B8B0A3] hover:bg-white/5"
+            onClick={onClose}
+          >
+            Закрыть
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
 async function parseJson<T>(response: Response): Promise<T> {
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -542,11 +575,26 @@ async function parseJson<T>(response: Response): Promise<T> {
 }
 
 type GoalGraphClientInnerProps = {
+  boards: BoardSummary[];
+  currentBoardId: string;
+  currentBoardRole: BoardRole;
+  currentUserEmail: string | null;
+  isPublicView?: boolean;
+  publicBoardTitle?: string;
   initialGraph: GraphResponse;
   initialNext: NextGoalItem[];
 };
 
-function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInnerProps) {
+function GoalGraphClientInner({
+  boards,
+  currentBoardId,
+  currentBoardRole,
+  currentUserEmail,
+  isPublicView = false,
+  publicBoardTitle,
+  initialGraph,
+  initialNext,
+}: GoalGraphClientInnerProps) {
   const reactFlow = useReactFlow<Node<GoalNodeData>, Edge>();
   const flowSectionRef = useRef<HTMLElement | null>(null);
   const [nodes, setNodes] = useState<Node<GoalNodeData>[]>(() =>
@@ -559,6 +607,43 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
   const [selectedGoalId, setSelectedGoalId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [isConnecting, setIsConnecting] = useState(false);
+  const [boardMembers, setBoardMembers] = useState<BoardMemberItem[]>([]);
+  const [publicShareToken, setPublicShareToken] = useState<string | null>(
+    boards.find((board) => board.id === currentBoardId)?.publicShareToken ?? null,
+  );
+  const [boardModalMode, setBoardModalMode] = useState<BoardModalMode | null>(null);
+  const [boardModalTitle, setBoardModalTitle] = useState("");
+  const [shareModalOpen, setShareModalOpen] = useState(false);
+  const [shareEmail, setShareEmail] = useState("");
+  const [shareRole, setShareRole] = useState<MemberRole>("VIEWER");
+  const [membersModalOpen, setMembersModalOpen] = useState(false);
+
+  useEffect(() => {
+    if (!error) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setError(null);
+    }, 5000);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [error]);
+
+  const isEditor = !isPublicView && (currentBoardRole === "OWNER" || currentBoardRole === "EDITOR");
+  const canManageShare = !isPublicView && currentBoardRole === "OWNER";
+  const publicUrl = publicShareToken ? `/share/${publicShareToken}` : null;
+
+  const withBoard = useCallback(
+    (path: string) => {
+      if (isPublicView) return path;
+      const separator = path.includes("?") ? "&" : "?";
+      return `${path}${separator}boardId=${encodeURIComponent(currentBoardId)}`;
+    },
+    [currentBoardId, isPublicView],
+  );
 
   const selectedGoalNode = useMemo(
     () => nodes.find((node) => node.id === selectedGoalId) ?? null,
@@ -615,18 +700,23 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
     () =>
       nodes.map((node) => ({
         ...node,
+        selected: node.id === selectedGoalId,
         hidden: query.length === 0 ? false : !matchesSearch(node.data.title),
         data: {
           ...node.data,
           isConnecting,
         },
       })),
-    [isConnecting, matchesSearch, nodes, query.length],
+    [isConnecting, matchesSearch, nodes, query.length, selectedGoalId],
   );
   const focusCount = activeGoals.length;
   const startableCount = availableGoals.length;
   const blockedCount = blockedGoals.length;
   const doneCount = nodes.filter((node) => node.data.computedState === "DONE").length;
+
+  const focusGoal = useCallback((goalId: string) => {
+    setSelectedGoalId(goalId);
+  }, []);
 
   const getNextGoalPosition = useCallback(() => {
     const flowSection = flowSectionRef.current;
@@ -649,7 +739,7 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
     setIsLoading(true);
     setError(null);
     try {
-      const response = await fetch("/api/graph");
+      const response = await fetch(withBoard("/api/graph"));
       const data = await parseJson<GraphResponse>(response);
       const nextEdges = data.edges.map(toFlowEdge);
       setNodes(buildFlowNodes(data.goals, data.edges));
@@ -659,26 +749,31 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [withBoard]);
 
   const loadNext = useCallback(async () => {
     try {
-      const response = await fetch("/api/next");
+      const response = await fetch(withBoard("/api/next"));
       const data = await parseJson<NextGoalItem[]>(response);
       setNextGoals(data);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "Failed to load next goals");
     }
-  }, []);
+  }, [withBoard]);
 
   const createGoal = useCallback(async () => {
+    if (!isEditor) {
+      setError("У вас только read-only доступ к этой доске.");
+      return;
+    }
+
     const title = window.prompt("Название новой цели");
     if (!title?.trim()) return;
     const { x, y } = getNextGoalPosition();
 
     setError(null);
     try {
-      const response = await fetch("/api/goals", {
+      const response = await fetch(withBoard("/api/goals"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -695,17 +790,22 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
     } catch (createError) {
       setError(createError instanceof Error ? createError.message : "Failed to create goal");
     }
-  }, [edges, getNextGoalPosition, loadNext]);
+  }, [edges, getNextGoalPosition, isEditor, loadNext, withBoard]);
 
   const updateGoal = useCallback(
     async (
       goalId: string,
       patch: Partial<Pick<ApiGoal, "title" | "description" | "status" | "priority" | "type" | "x" | "y">>,
     ) => {
+      if (!isEditor) {
+        setError("У вас только read-only доступ к этой доске.");
+        return;
+      }
+
       setError(null);
 
       try {
-        const response = await fetch(`/api/goals/${goalId}`, {
+        const response = await fetch(withBoard(`/api/goals/${goalId}`), {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(patch),
@@ -738,16 +838,20 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
         setError(updateError instanceof Error ? updateError.message : "Failed to update goal");
       }
     },
-    [edges, loadNext],
+    [edges, isEditor, loadNext, withBoard],
   );
 
   const deleteGoal = useCallback(async () => {
+    if (!isEditor) {
+      setError("У вас только read-only доступ к этой доске.");
+      return;
+    }
     if (!selectedGoalId) return;
     if (!window.confirm("Удалить цель и связанные связи?")) return;
     setError(null);
 
     try {
-      const response = await fetch(`/api/goals/${selectedGoalId}`, {
+      const response = await fetch(withBoard(`/api/goals/${selectedGoalId}`), {
         method: "DELETE",
       });
       if (!response.ok) {
@@ -763,7 +867,7 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
     } catch (deleteError) {
       setError(deleteError instanceof Error ? deleteError.message : "Failed to delete goal");
     }
-  }, [edges, loadNext, selectedGoalId]);
+  }, [edges, isEditor, loadNext, selectedGoalId, withBoard]);
 
   const onNodesChange = useCallback((changes: NodeChange<Node<GoalNodeData>>[]) => {
     setNodes((prev) => applyNodeChanges<Node<GoalNodeData>>(changes, prev));
@@ -774,11 +878,15 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
   }, []);
 
   const onConnect = useCallback<OnConnect>(async (connection: Connection) => {
+    if (!isEditor) {
+      setError("У вас только read-only доступ к этой доске.");
+      return;
+    }
     if (!connection.source || !connection.target) return;
 
     setError(null);
     try {
-      const response = await fetch("/api/edges", {
+      const response = await fetch(withBoard("/api/edges"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -801,7 +909,7 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
         setError("Не удалось создать связь.");
       }
     }
-  }, [loadNext]);
+  }, [isEditor, loadNext, withBoard]);
 
   const onConnectStart = useCallback(() => {
     setIsConnecting(true);
@@ -816,6 +924,8 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
   }, []);
 
   const onNodeDragStop = useCallback(async (_: unknown, node: Node<GoalNodeData>) => {
+    if (!isEditor) return;
+
     try {
       await updateGoal(node.id, {
         x: node.position.x,
@@ -824,14 +934,18 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
     } catch {
       setError("Failed to save node position");
     }
-  }, [updateGoal]);
+  }, [isEditor, updateGoal]);
 
   const onEdgeDoubleClick = useCallback(async (_: unknown, edge: Edge) => {
+    if (!isEditor) {
+      setError("У вас только read-only доступ к этой доске.");
+      return;
+    }
     if (!window.confirm("Удалить связь?")) return;
 
     setError(null);
     try {
-      const response = await fetch(`/api/edges/${edge.id}`, {
+      const response = await fetch(withBoard(`/api/edges/${edge.id}`), {
         method: "DELETE",
       });
       if (!response.ok) {
@@ -846,7 +960,7 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
     } catch (deleteError) {
       setError(deleteError instanceof Error ? deleteError.message : "Failed to delete edge");
     }
-  }, [loadNext]);
+  }, [isEditor, loadNext, withBoard]);
 
   const selectedBlockedBy = useMemo(() => {
     if (!selectedGoalNode) return [];
@@ -904,6 +1018,179 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
     [setNodeField, updateGoal],
   );
 
+  const createBoard = useCallback(async (title: string) => {
+    try {
+      const response = await fetch("/api/boards", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: title.trim() }),
+      });
+      const allBoards = await parseJson<BoardSummary[]>(response);
+      const created = allBoards.at(-1);
+      if (created) {
+        window.location.assign(`/?boardId=${encodeURIComponent(created.id)}`);
+      } else {
+        window.location.reload();
+      }
+    } catch (createBoardError) {
+      setError(createBoardError instanceof Error ? createBoardError.message : "Failed to create board");
+    }
+  }, []);
+
+  const renameBoard = useCallback(
+    async (title: string) => {
+      if (!isEditor) {
+        setError("Только editor/owner может переименовывать доску.");
+        return;
+      }
+
+      try {
+        const response = await fetch(`/api/boards/${currentBoardId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: title.trim() }),
+        });
+        await parseJson<{ ok: boolean }>(response);
+        window.location.reload();
+      } catch (renameError) {
+        setError(renameError instanceof Error ? renameError.message : "Failed to rename board");
+      }
+    },
+    [currentBoardId, isEditor],
+  );
+
+  const inviteMember = useCallback(
+    async (email: string, role: MemberRole) => {
+      if (!isEditor) {
+        setError("Только editor/owner может делиться доской.");
+        return;
+      }
+
+      try {
+        const response = await fetch(`/api/boards/${currentBoardId}/members`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: email.trim(), role }),
+        });
+        const members = await parseJson<BoardMemberItem[]>(response);
+        setBoardMembers(members);
+      } catch (shareError) {
+        setError(shareError instanceof Error ? shareError.message : "Failed to share board");
+      }
+    },
+    [currentBoardId, isEditor],
+  );
+
+  const refreshMembers = useCallback(async () => {
+    if (isPublicView) return;
+    try {
+      const response = await fetch(`/api/boards/${currentBoardId}/members`);
+      const members = await parseJson<BoardMemberItem[]>(response);
+      setBoardMembers(members);
+    } catch (membersError) {
+      setError(membersError instanceof Error ? membersError.message : "Failed to load members");
+    }
+  }, [currentBoardId, isPublicView]);
+
+  const openCreateBoardModal = useCallback(() => {
+    setBoardModalMode("create");
+    setBoardModalTitle("");
+  }, []);
+
+  const openRenameBoardModal = useCallback(() => {
+    if (!isEditor) {
+      setError("Только editor/owner может переименовывать доску.");
+      return;
+    }
+    const currentTitle = boards.find((board) => board.id === currentBoardId)?.title ?? "";
+    setBoardModalMode("rename");
+    setBoardModalTitle(currentTitle);
+  }, [boards, currentBoardId, isEditor]);
+
+  const submitBoardModal = useCallback(async () => {
+    if (!boardModalMode || !boardModalTitle.trim()) return;
+    if (boardModalMode === "create") {
+      await createBoard(boardModalTitle);
+    } else {
+      await renameBoard(boardModalTitle);
+    }
+    setBoardModalMode(null);
+  }, [boardModalMode, boardModalTitle, createBoard, renameBoard]);
+
+  const openShareModal = useCallback(async () => {
+    if (!isEditor) {
+      setError("Только editor/owner может делиться доской.");
+      return;
+    }
+    await refreshMembers();
+    setShareEmail("");
+    setShareRole("VIEWER");
+    setShareModalOpen(true);
+  }, [isEditor, refreshMembers]);
+
+  const submitShareModal = useCallback(async () => {
+    if (!shareEmail.trim()) return;
+    await inviteMember(shareEmail, shareRole);
+    setShareEmail("");
+    setShareRole("VIEWER");
+  }, [inviteMember, shareEmail, shareRole]);
+
+  const openMembersModal = useCallback(async () => {
+    await refreshMembers();
+    setMembersModalOpen(true);
+  }, [refreshMembers]);
+
+  const changeMemberRole = useCallback(
+    async (memberUserId: string, role: MemberRole) => {
+      try {
+        const response = await fetch(`/api/boards/${currentBoardId}/members/${memberUserId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ role }),
+        });
+        await parseJson<{ ok: boolean }>(response);
+        await refreshMembers();
+      } catch (roleError) {
+        setError(roleError instanceof Error ? roleError.message : "Failed to change member role");
+      }
+    },
+    [currentBoardId, refreshMembers],
+  );
+
+  const removeMember = useCallback(
+    async (memberUserId: string) => {
+      try {
+        const response = await fetch(`/api/boards/${currentBoardId}/members/${memberUserId}`, {
+          method: "DELETE",
+        });
+        await parseJson<{ ok: boolean }>(response);
+        await refreshMembers();
+      } catch (removeError) {
+        setError(removeError instanceof Error ? removeError.message : "Failed to remove member");
+      }
+    },
+    [currentBoardId, refreshMembers],
+  );
+
+  const togglePublicReadOnly = useCallback(async () => {
+    if (!canManageShare) {
+      setError("Только owner может управлять публичной ссылкой.");
+      return;
+    }
+
+    try {
+      const response = await fetch(`/api/boards/${currentBoardId}/public`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: !publicShareToken }),
+      });
+      const payload = await parseJson<{ publicShareToken: string | null }>(response);
+      setPublicShareToken(payload.publicShareToken);
+    } catch (publicError) {
+      setError(publicError instanceof Error ? publicError.message : "Failed to update public share");
+    }
+  }, [canManageShare, currentBoardId, publicShareToken]);
+
   return (
     <div className="flex h-full w-full flex-col bg-[#101211] text-[#F2EEE6]">
       <header className="flex h-20 items-center gap-5 border-b border-white/10 bg-[#111312] px-6">
@@ -911,8 +1198,48 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
           <div className="grid h-9 w-9 place-items-center rounded-lg border border-white/15 bg-[#1C1F1D] text-[#D8C8A8]">
             ◈
           </div>
-          <p className="text-2xl font-medium tracking-tight">GoalGraph</p>
+          <div>
+            <p className="text-2xl font-medium tracking-tight">GoalGraph</p>
+            {isPublicView ? (
+              <p className="text-xs text-[#B8B0A3]">Публичный просмотр: {publicBoardTitle ?? "Board"}</p>
+            ) : (
+              <p className="text-xs text-[#B8B0A3]">{currentBoardRole === "VIEWER" ? "Read-only" : "Editable"}</p>
+            )}
+          </div>
         </div>
+
+        {!isPublicView ? (
+          <div className="flex items-center gap-2">
+            <select
+              className="h-10 rounded-xl border border-white/10 bg-[#181B1A] px-3 text-sm text-[#F2EEE6] outline-none"
+              value={currentBoardId}
+              onChange={(event) =>
+                window.location.assign(`/?boardId=${encodeURIComponent(event.target.value)}`)
+              }
+            >
+              {boards.map((board) => (
+                <option key={board.id} value={board.id}>
+                  {board.title} ({board.role.toLowerCase()})
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="h-10 rounded-xl border border-white/10 bg-[#181B1A] px-3 text-xs text-[#B8B0A3] hover:bg-white/5"
+              onClick={openCreateBoardModal}
+            >
+              + Доска
+            </button>
+            <button
+              type="button"
+              className="h-10 rounded-xl border border-white/10 bg-[#181B1A] px-3 text-xs text-[#B8B0A3] hover:bg-white/5"
+              onClick={openRenameBoardModal}
+              disabled={!isEditor}
+            >
+              Переименовать
+            </button>
+          </div>
+        ) : null}
 
         <div className="min-w-0 flex-1">
           <div className="flex h-11 items-center gap-3 rounded-xl border border-white/10 bg-[#181B1A] px-3">
@@ -928,8 +1255,9 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
 
         <button
           type="button"
-          className="h-10 rounded-xl bg-[#B96745] px-4 text-sm font-medium text-[#F2EEE6] transition hover:bg-[#C47657]"
+          className="h-10 rounded-xl bg-[#B96745] px-4 text-sm font-medium text-[#F2EEE6] transition hover:bg-[#C47657] disabled:cursor-not-allowed disabled:opacity-50"
           onClick={createGoal}
+          disabled={!isEditor}
         >
           + Новая цель
         </button>
@@ -956,6 +1284,14 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
             <p className="text-[#F2EEE6]">{doneCount}</p>
             <p>done</p>
           </div>
+          {!isPublicView ? (
+            <div className="text-right">
+              <p className="max-w-40 truncate text-[#F2EEE6]">{currentUserEmail ?? "user"}</p>
+              <Link className="underline decoration-dotted" href="/api/auth/signout">
+                выйти
+              </Link>
+            </div>
+          ) : null}
         </div>
       </header>
 
@@ -978,7 +1314,7 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
                       key={goal.id}
                       type="button"
                       className="w-full rounded-xl border border-[#B96745]/35 bg-[#201D1A] px-3 py-2 text-left transition hover:border-[#B96745]/55"
-                      onClick={() => setSelectedGoalId(goal.id)}
+                      onClick={() => focusGoal(goal.id)}
                     >
                       <p className="truncate text-sm font-medium text-[#F2EEE6]">{goal.title}</p>
                       <p className="mt-1 text-[11px] text-[#B8B0A3]">{typeLabel[goal.type]}</p>
@@ -1004,7 +1340,7 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
                       key={goal.id}
                       type="button"
                       className="w-full rounded-xl border border-[#8B944C]/35 bg-[#1D211D] px-3 py-2 text-left transition hover:border-[#8B944C]/55"
-                      onClick={() => setSelectedGoalId(goal.id)}
+                      onClick={() => focusGoal(goal.id)}
                     >
                       <p className="truncate text-sm font-medium text-[#F2EEE6]">{goal.title}</p>
                       <div className="mt-1 flex items-center justify-between text-[11px] text-[#B8B0A3]">
@@ -1075,13 +1411,16 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
             onConnectStart={onConnectStart}
             onConnectEnd={onConnectEnd}
             onEdgeDoubleClick={onEdgeDoubleClick}
+            onPaneClick={() => setSelectedGoalId(null)}
             defaultEdgeOptions={{
               type: "boundaryStraight",
               style: { stroke: EDGE_STROKE, strokeWidth: EDGE_WIDTH },
             }}
+            nodesDraggable={isEditor}
+            nodesConnectable={isEditor}
             fitView
           >
-            <Background gap={24} size={1} />
+            <Background gap={24} size={1} color="rgba(216, 200, 168, 0.3)" />
             <MiniMap
               pannable
               zoomable
@@ -1103,7 +1442,7 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
                 return "#6E6A60";
               }}
             />
-            <Controls position="bottom-left" />
+            <Controls position="bottom-left" showInteractive={false} />
           </ReactFlow>
           {isLoading ? (
             <div className="absolute bottom-4 left-4 z-10 text-xs text-[#8A857B]">Загрузка...</div>
@@ -1111,6 +1450,66 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
         </section>
 
         <aside className="w-[340px] overflow-y-auto border-l border-white/10 bg-[#171918] px-4 py-5">
+          {!isPublicView && !selectedGoalNode ? (
+            <div className="mb-4 space-y-2 rounded-xl border border-white/10 bg-[#1D201E] p-3 text-xs text-[#B8B0A3]">
+              <div className="flex items-center justify-between">
+                <p className="font-semibold text-[#F2EEE6]">Доступ к доске</p>
+                <p>{currentBoardRole.toLowerCase()}</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="rounded-lg border border-white/10 px-2 py-1 hover:bg-white/5 disabled:opacity-50"
+                  onClick={() => void openShareModal()}
+                  disabled={!isEditor}
+                >
+                  Пригласить
+                </button>
+                <button
+                  type="button"
+                  className="rounded-lg border border-white/10 px-2 py-1 hover:bg-white/5"
+                  onClick={() => void openMembersModal()}
+                >
+                  Участники
+                </button>
+                <button
+                  type="button"
+                  className="rounded-lg border border-white/10 px-2 py-1 hover:bg-white/5 disabled:opacity-50"
+                  onClick={togglePublicReadOnly}
+                  disabled={!canManageShare}
+                >
+                  {publicShareToken ? "Скрыть public" : "Сделать public"}
+                </button>
+                {publicUrl ? (
+                  <button
+                    type="button"
+                    className="rounded-lg border border-white/10 px-2 py-1 hover:bg-white/5"
+                    onClick={() =>
+                      void navigator.clipboard.writeText(
+                        `${window.location.origin}${publicUrl}`,
+                      )
+                    }
+                  >
+                    Копировать ссылку
+                  </button>
+                ) : null}
+              </div>
+              {publicUrl ? <p className="break-all text-[11px]">{publicUrl}</p> : null}
+              <div className="max-h-28 overflow-y-auto rounded-lg border border-white/10 p-2 text-[11px]">
+                {boardMembers.length === 0 ? (
+                  <p className="text-[#777268]">Участников нет</p>
+                ) : (
+                  boardMembers.map((member) => (
+                    <p key={member.userId}>
+                      {member.email} - {member.role.toLowerCase()}
+                      {member.email === currentUserEmail ? " (вы)" : ""}
+                    </p>
+                  ))
+                )}
+              </div>
+            </div>
+          ) : null}
+
           {selectedGoalNode ? (
             <div className="space-y-4">
               <div className="flex items-start justify-between gap-3">
@@ -1144,6 +1543,7 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
                 <input
                   className="mt-1 h-10 w-full rounded-xl border border-white/10 bg-[#181B1A] px-3 text-sm text-[#F2EEE6] outline-none focus:border-[#D39A43]/45"
                   value={selectedTitle}
+                  disabled={!isEditor}
                   onChange={(event) => setNodeField(selectedGoalNode.id, { title: event.target.value })}
                 />
               </label>
@@ -1153,6 +1553,7 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
                 <textarea
                   className="mt-1 h-24 w-full rounded-xl border border-white/10 bg-[#181B1A] px-3 py-2 text-sm text-[#F2EEE6] outline-none focus:border-[#D39A43]/45"
                   value={selectedDescription}
+                  disabled={!isEditor}
                   onChange={(event) =>
                     setNodeField(selectedGoalNode.id, { description: event.target.value })
                   }
@@ -1165,6 +1566,7 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
                   <select
                     className="mt-1 h-10 w-full rounded-xl border border-white/10 bg-[#181B1A] px-2 text-sm text-[#F2EEE6] outline-none focus:border-[#D39A43]/45"
                     value={selectedType}
+                    disabled={!isEditor}
                     onChange={(event) =>
                       setNodeField(selectedGoalNode.id, { type: event.target.value as GoalType })
                     }
@@ -1182,6 +1584,7 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
                   <select
                     className="mt-1 h-10 w-full rounded-xl border border-white/10 bg-[#181B1A] px-2 text-sm text-[#F2EEE6] outline-none focus:border-[#D39A43]/45"
                     value={selectedStatus}
+                    disabled={!isEditor}
                     onChange={(event) =>
                       setNodeField(selectedGoalNode.id, { status: event.target.value as GoalStatus })
                     }
@@ -1203,6 +1606,7 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
                   max={5}
                   className="mt-1 h-10 w-full rounded-xl border border-white/10 bg-[#181B1A] px-3 text-sm text-[#F2EEE6] outline-none focus:border-[#D39A43]/45"
                   value={selectedPriority}
+                  disabled={!isEditor}
                   onChange={(event) =>
                     setNodeField(selectedGoalNode.id, {
                       priority: Math.min(5, Math.max(1, Number(event.target.value || 3))),
@@ -1214,7 +1618,8 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
               <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
-                  className="h-10 rounded-xl bg-[#B96745] text-sm font-medium text-[#F2EEE6] hover:bg-[#C47657]"
+                  className="h-10 rounded-xl bg-[#B96745] text-sm font-medium text-[#F2EEE6] hover:bg-[#C47657] disabled:opacity-50"
+                  disabled={!isEditor}
                   onClick={() =>
                     void updateGoal(selectedGoalNode.id, {
                       title: selectedTitle,
@@ -1229,21 +1634,24 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
                 </button>
                 <button
                   type="button"
-                  className="h-10 rounded-xl bg-[#8B944C]/35 text-sm text-[#DCE6AA] hover:bg-[#8B944C]/45"
+                  className="h-10 rounded-xl bg-[#8B944C]/35 text-sm text-[#DCE6AA] hover:bg-[#8B944C]/45 disabled:opacity-50"
+                  disabled={!isEditor}
                   onClick={() => void quickSetStatus(selectedGoalNode.id, "DONE")}
                 >
                   Отметить done
                 </button>
                 <button
                   type="button"
-                  className="h-10 rounded-xl bg-[#D39A43]/30 text-sm text-[#E6CA96] hover:bg-[#D39A43]/40"
+                  className="h-10 rounded-xl bg-[#D39A43]/30 text-sm text-[#E6CA96] hover:bg-[#D39A43]/40 disabled:opacity-50"
+                  disabled={!isEditor}
                   onClick={() => void quickSetStatus(selectedGoalNode.id, "ACTIVE")}
                 >
                   В работу
                 </button>
                 <button
                   type="button"
-                  className="h-10 rounded-xl bg-[#A94F3D]/30 text-sm text-[#F0B0A0] hover:bg-[#A94F3D]/40"
+                  className="h-10 rounded-xl bg-[#A94F3D]/30 text-sm text-[#F0B0A0] hover:bg-[#A94F3D]/40 disabled:opacity-50"
+                  disabled={!isEditor}
                   onClick={() => void quickSetStatus(selectedGoalNode.id, "DROPPED")}
                 >
                   Отменить
@@ -1252,7 +1660,8 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
 
               <button
                 type="button"
-                className="h-10 w-full rounded-xl border border-[#A94F3D]/50 bg-[#2A1A18] text-sm text-[#F0B0A0] hover:bg-[#351F1B]"
+                className="h-10 w-full rounded-xl border border-[#A94F3D]/50 bg-[#2A1A18] text-sm text-[#F0B0A0] hover:bg-[#351F1B] disabled:opacity-50"
+                disabled={!isEditor}
                 onClick={deleteGoal}
               >
                 Удалить цель
@@ -1281,19 +1690,161 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
           )}
         </aside>
       </div>
+
+      {boardModalMode ? (
+        <Modal
+          title={boardModalMode === "create" ? "Новая доска" : "Переименовать доску"}
+          onClose={() => setBoardModalMode(null)}
+        >
+          <div className="space-y-3">
+            <label className="block text-xs text-[#B8B0A3]">
+              Название
+              <input
+                className="mt-1 h-10 w-full rounded-xl border border-white/10 bg-[#181B1A] px-3 text-sm text-[#F2EEE6] outline-none"
+                value={boardModalTitle}
+                onChange={(event) => setBoardModalTitle(event.target.value)}
+                placeholder="Например, Рабочие цели"
+              />
+            </label>
+            <div className="flex justify-end">
+              <button
+                type="button"
+                className="h-10 rounded-xl bg-[#B96745] px-4 text-sm font-medium text-[#F2EEE6] hover:bg-[#C47657]"
+                onClick={() => void submitBoardModal()}
+              >
+                Сохранить
+              </button>
+            </div>
+          </div>
+        </Modal>
+      ) : null}
+
+      {shareModalOpen ? (
+        <Modal title="Поделиться доской" onClose={() => setShareModalOpen(false)}>
+          <div className="space-y-3">
+            <label className="block text-xs text-[#B8B0A3]">
+              Email пользователя
+              <input
+                type="email"
+                className="mt-1 h-10 w-full rounded-xl border border-white/10 bg-[#181B1A] px-3 text-sm text-[#F2EEE6] outline-none"
+                value={shareEmail}
+                onChange={(event) => setShareEmail(event.target.value)}
+                placeholder="user@example.com"
+              />
+            </label>
+            <label className="block text-xs text-[#B8B0A3]">
+              Роль
+              <select
+                className="mt-1 h-10 w-full rounded-xl border border-white/10 bg-[#181B1A] px-3 text-sm text-[#F2EEE6] outline-none"
+                value={shareRole}
+                onChange={(event) => setShareRole(event.target.value as MemberRole)}
+              >
+                <option value="VIEWER">viewer (read-only)</option>
+                <option value="EDITOR">editor (редактирование)</option>
+              </select>
+            </label>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                className="h-10 rounded-xl border border-white/10 px-4 text-sm text-[#B8B0A3] hover:bg-white/5"
+                onClick={() => setShareModalOpen(false)}
+              >
+                Отмена
+              </button>
+              <button
+                type="button"
+                className="h-10 rounded-xl bg-[#B96745] px-4 text-sm font-medium text-[#F2EEE6] hover:bg-[#C47657]"
+                onClick={() => void submitShareModal()}
+              >
+                Выдать доступ
+              </button>
+            </div>
+          </div>
+        </Modal>
+      ) : null}
+
+      {membersModalOpen ? (
+        <Modal title="Участники доски" onClose={() => setMembersModalOpen(false)}>
+          <div className="space-y-2">
+            {boardMembers.length === 0 ? (
+              <p className="text-sm text-[#777268]">Участников пока нет.</p>
+            ) : (
+              boardMembers.map((member) => (
+                <div
+                  key={member.userId}
+                  className="flex items-center justify-between rounded-xl border border-white/10 bg-[#1D201E] p-2"
+                >
+                  <div>
+                    <p className="text-sm text-[#F2EEE6]">
+                      {member.email}
+                      {member.email === currentUserEmail ? " (вы)" : ""}
+                    </p>
+                    <p className="text-[11px] text-[#8A857B]">{member.name ?? "Без имени"}</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <select
+                      className="h-8 rounded-lg border border-white/10 bg-[#181B1A] px-2 text-xs text-[#F2EEE6]"
+                      value={member.role}
+                      disabled={!isEditor || member.email === currentUserEmail}
+                      onChange={(event) =>
+                        void changeMemberRole(member.userId, event.target.value as MemberRole)
+                      }
+                    >
+                      <option value="VIEWER">viewer</option>
+                      <option value="EDITOR">editor</option>
+                    </select>
+                    <button
+                      type="button"
+                      className="h-8 rounded-lg border border-[#A94F3D]/50 px-2 text-xs text-[#F0B0A0] hover:bg-[#351F1B] disabled:opacity-50"
+                      disabled={!isEditor || member.email === currentUserEmail}
+                      onClick={() => void removeMember(member.userId)}
+                    >
+                      Удалить
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </Modal>
+      ) : null}
     </div>
   );
 }
 
 type GoalGraphClientProps = {
+  boards: BoardSummary[];
+  currentBoardId: string;
+  currentBoardRole: BoardRole;
+  currentUserEmail: string | null;
+  isPublicView?: boolean;
+  publicBoardTitle?: string;
   initialGraph: GraphResponse;
   initialNext: NextGoalItem[];
 };
 
-export function GoalGraphClient({ initialGraph, initialNext }: GoalGraphClientProps) {
+export function GoalGraphClient({
+  boards,
+  currentBoardId,
+  currentBoardRole,
+  currentUserEmail,
+  isPublicView,
+  publicBoardTitle,
+  initialGraph,
+  initialNext,
+}: GoalGraphClientProps) {
   return (
     <ReactFlowProvider>
-      <GoalGraphClientInner initialGraph={initialGraph} initialNext={initialNext} />
+      <GoalGraphClientInner
+        boards={boards}
+        currentBoardId={currentBoardId}
+        currentBoardRole={currentBoardRole}
+        currentUserEmail={currentUserEmail}
+        isPublicView={isPublicView}
+        publicBoardTitle={publicBoardTitle}
+        initialGraph={initialGraph}
+        initialNext={initialNext}
+      />
     </ReactFlowProvider>
   );
 }

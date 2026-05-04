@@ -2,13 +2,24 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockPrisma = {
   goal: {
-    update: vi.fn(),
-    delete: vi.fn(),
+    updateMany: vi.fn(),
+    findFirst: vi.fn(),
+    deleteMany: vi.fn(),
   },
 };
 
 vi.mock("@/server/db", () => ({
   prisma: mockPrisma,
+}));
+
+vi.mock("@/server/auth-session", () => ({
+  getSessionUser: vi.fn().mockResolvedValue({ id: "u1", email: "u@example.com", name: null }),
+}));
+
+vi.mock("@/server/board-access", () => ({
+  getBoardIdFromRequest: vi.fn().mockReturnValue("b1"),
+  getUserBoardRole: vi.fn().mockResolvedValue("OWNER"),
+  boardRoleSatisfies: vi.fn().mockReturnValue(true),
 }));
 
 describe("PATCH /api/goals/:id", () => {
@@ -17,7 +28,8 @@ describe("PATCH /api/goals/:id", () => {
   });
 
   it("updates goal", async () => {
-    mockPrisma.goal.update.mockResolvedValueOnce({
+    mockPrisma.goal.updateMany.mockResolvedValueOnce({ count: 1 });
+    mockPrisma.goal.findFirst.mockResolvedValueOnce({
       id: "g1",
       title: "Updated",
       priority: 1,
@@ -25,7 +37,7 @@ describe("PATCH /api/goals/:id", () => {
     });
 
     const { PATCH } = await import("./route");
-    const request = new Request("http://localhost/api/goals/g1", {
+    const request = new Request("http://localhost/api/goals/g1?boardId=b1", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ title: "Updated", priority: 1, status: "ACTIVE" }),
@@ -39,10 +51,10 @@ describe("PATCH /api/goals/:id", () => {
   });
 
   it("returns 404 when goal not found", async () => {
-    mockPrisma.goal.update.mockRejectedValueOnce({ code: "P2025" });
+    mockPrisma.goal.updateMany.mockResolvedValueOnce({ count: 0 });
 
     const { PATCH } = await import("./route");
-    const request = new Request("http://localhost/api/goals/g1", {
+    const request = new Request("http://localhost/api/goals/g1?boardId=b1", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ title: "Updated" }),
@@ -57,7 +69,7 @@ describe("PATCH /api/goals/:id", () => {
 
   it("returns 400 for empty patch", async () => {
     const { PATCH } = await import("./route");
-    const request = new Request("http://localhost/api/goals/g1", {
+    const request = new Request("http://localhost/api/goals/g1?boardId=b1", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({}),
@@ -74,10 +86,10 @@ describe("DELETE /api/goals/:id", () => {
   });
 
   it("deletes goal", async () => {
-    mockPrisma.goal.delete.mockResolvedValueOnce({ id: "g1" });
+    mockPrisma.goal.deleteMany.mockResolvedValueOnce({ count: 1 });
     const { DELETE } = await import("./route");
 
-    const response = await DELETE(new Request("http://localhost/api/goals/g1"), {
+    const response = await DELETE(new Request("http://localhost/api/goals/g1?boardId=b1"), {
       params: Promise.resolve({ id: "g1" }),
     });
 
@@ -85,10 +97,10 @@ describe("DELETE /api/goals/:id", () => {
   });
 
   it("returns 404 when deleting absent goal", async () => {
-    mockPrisma.goal.delete.mockRejectedValueOnce({ code: "P2025" });
+    mockPrisma.goal.deleteMany.mockResolvedValueOnce({ count: 0 });
     const { DELETE } = await import("./route");
 
-    const response = await DELETE(new Request("http://localhost/api/goals/g1"), {
+    const response = await DELETE(new Request("http://localhost/api/goals/g1?boardId=b1"), {
       params: Promise.resolve({ id: "g1" }),
     });
     const payload = await response.json();

@@ -18,3 +18,24 @@ export const createEdgeSchema = z.object({
   targetId: z.string().min(1),
   type: z.enum(["REQUIRES", "RELATED"]).optional(),
 });
+
+export const createBoardSchema = z.object({
+  title: z.string().trim().min(1).max(120),
+});
+
+export const updateBoardSchema = z.object({
+  title: z.string().trim().min(1).max(120),
+});
+
+export const shareBoardWithUserSchema = z.object({
+  email: z.string().trim().email().max(320),
+  role: z.enum(["VIEWER", "EDITOR"]),
+});
+
+export const updateBoardMemberSchema = z.object({
+  role: z.enum(["VIEWER", "EDITOR"]),
+});
+
+export const updateBoardPublicSchema = z.object({
+  enabled: z.boolean(),
+});

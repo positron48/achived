@@ -18,10 +18,13 @@ services:
       - goalgraph_postgres_data:/var/lib/postgresql/data
 
   app:
-    image: node:20-alpine
+    image: node:20
     container_name: goalgraph-app
     restart: unless-stopped
     working_dir: /app
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     depends_on:
       db:
         condition: service_healthy
@@ -36,7 +39,7 @@ services:
     command: >
       sh -c "npm install &&
              npx prisma generate &&
-             npx prisma db push &&
+             (npx prisma migrate deploy || npx prisma db push --accept-data-loss) &&
              npm run dev -- --hostname 0.0.0.0 --port 3000"
 
 volumes:

@@ -3,7 +3,11 @@ import { NextResponse, type NextRequest } from "next/server";
 import { isBasicAuthAuthorized } from "@/server/basic-auth";
 
 export function middleware(request: NextRequest) {
-  if (request.nextUrl.pathname === "/api/health") {
+  if (
+    request.nextUrl.pathname === "/api/health" ||
+    request.nextUrl.pathname.startsWith("/api/auth") ||
+    request.nextUrl.pathname.startsWith("/share/")
+  ) {
     return NextResponse.next();
   }
 

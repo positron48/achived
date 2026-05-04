@@ -64,7 +64,7 @@ body {
 }
 
 .goal-graph-flow .react-flow__background path {
-  stroke: rgba(216, 200, 168, 0.08);
+  stroke: rgba(216, 200, 168, 0.045);
 }
 
 .goal-graph-flow .react-flow__controls {

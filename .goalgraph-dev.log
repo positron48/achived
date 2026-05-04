@@ -1,0 +1,80 @@
+
+> goalgraph@0.1.0 dev
+> next dev --hostname 0.0.0.0 --port 3001
+
+▲ Next.js 16.2.4 (Turbopack)
+- Local:         http://localhost:3001
+- Network:       http://0.0.0.0:3001
+- Environments: .env
+✓ Ready in 475ms
+
+ GET / 200 in 1216ms (next.js: 144ms, application-code: 1072ms)
+ GET / 200 in 34ms (next.js: 4ms, application-code: 29ms)
+ GET /api/auth/providers 200 in 1183ms (next.js: 1153ms, application-code: 30ms)
+ GET /api/auth/csrf 200 in 12ms (next.js: 4ms, application-code: 7ms)
+(node:80644) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+ POST /api/auth/signin/google?prompt=select_account 200 in 823ms (next.js: 2ms, application-code: 821ms)
+ GET /api/auth/callback/google?state=K_CjTC384ThO6jhr9FKAgkrOg9r0j9_fQE4cSdpu_6s&iss=https%3A%2F%2Faccounts.google.com&code=4%2F0AeoWuM8AiaWvV4BQkuiPe2KHsTsofq4DMSSNIKgcQW5j9jQA33BBgnAUlkzu1S0y17QMew&scope=email+profile+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fuserinfo.profile+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fuserinfo.email+openid&authuser=0&prompt=consent 302 in 1077ms (next.js: 5ms, application-code: 1073ms)
+ GET / 200 in 106ms (next.js: 2ms, application-code: 104ms)
+ GET /api/boards/cmoqzcb8i0004ij84kzisrnwy/members 200 in 1180ms (next.js: 1147ms, application-code: 33ms)
+ PATCH /api/boards/cmoqzcb8i0004ij84kzisrnwy/public 200 in 1169ms (next.js: 1119ms, application-code: 51ms)
+ GET /share/24357504231712071c7852eeb636e0d751558e994679bb75 200 in 777ms (next.js: 701ms, application-code: 76ms)
+ GET /api/graph 401 in 108ms (next.js: 100ms, application-code: 8ms)
+ PATCH /api/boards/cmoqzcb8i0004ij84kzisrnwy 200 in 1437ms (next.js: 1322ms, application-code: 115ms)
+⨯ ReferenceError: window is not defined
+    at GoalGraphClientInner (src/components/GoalGraphClient.tsx:623:43)
+  621 |   const isEditor = !isPublicView && (currentBoardRole === "OWNER" || currentBoardRole ===...
+  622 |   const canManageShare = !isPublicView && currentBoardRole === "OWNER";
+> 623 |   const publicUrl = publicShareToken ? `${window.location.origin}/share/${publicShareToke...
+      |                                           ^
+  624 |
+  625 |   const withBoard = useCallback(
+  626 |     (path: string) => { {
+  digest: '3925700771'
+}
+ GET / 500 in 291ms (next.js: 7ms, application-code: 284ms)
+✓ Compiled in 111ms
+[browser] [React Flow]: It looks like you've created a new nodeTypes or edgeTypes object. If this wasn't on purpose please define the nodeTypes/edgeTypes outside of the component or memoize them. Help: https://reactflow.dev/error#002
+[browser] [React Flow]: It looks like you've created a new nodeTypes or edgeTypes object. If this wasn't on purpose please define the nodeTypes/edgeTypes outside of the component or memoize them. Help: https://reactflow.dev/error#002
+ GET / 200 in 87ms (next.js: 7ms, application-code: 80ms)
+ PATCH /api/boards/cmoqzcb8i0004ij84kzisrnwy/public 200 in 19ms (next.js: 5ms, application-code: 14ms)
+ PATCH /api/boards/cmoqzcb8i0004ij84kzisrnwy/public 200 in 15ms (next.js: 3ms, application-code: 11ms)
+ PATCH /api/boards/cmoqzcb8i0004ij84kzisrnwy/public 200 in 17ms (next.js: 3ms, application-code: 14ms)
+ GET /api/boards/cmoqzcb8i0004ij84kzisrnwy/members 200 in 18ms (next.js: 3ms, application-code: 14ms)
+ GET /api/boards/cmoqzcb8i0004ij84kzisrnwy/members 200 in 22ms (next.js: 4ms, application-code: 18ms)
+ POST /api/boards/cmoqzcb8i0004ij84kzisrnwy/members 404 in 26ms (next.js: 6ms, application-code: 20ms)
+✓ Compiled in 495ms
+ GET / 200 in 130ms (next.js: 8ms, application-code: 122ms)
+✓ Compiled in 261ms
+ GET / 200 in 1293ms (next.js: 508ms, application-code: 785ms)
+ GET / 200 in 572ms (next.js: 126ms, application-code: 446ms)
+ GET / 200 in 381ms (next.js: 8ms, application-code: 374ms)
+ GET / 200 in 341ms (next.js: 9ms, application-code: 332ms)
+ GET / 200 in 380ms (next.js: 13ms, application-code: 368ms)
+ GET / 200 in 284ms (next.js: 7ms, application-code: 277ms)
+ GET / 200 in 306ms (next.js: 24ms, application-code: 281ms)
+ GET / 200 in 330ms (next.js: 24ms, application-code: 306ms)
+ GET / 200 in 300ms (next.js: 11ms, application-code: 290ms)
+ GET / 200 in 330ms (next.js: 22ms, application-code: 308ms)
+ GET / 200 in 296ms (next.js: 7ms, application-code: 290ms)
+ GET / 200 in 278ms (next.js: 23ms, application-code: 254ms)
+ GET / 200 in 251ms (next.js: 10ms, application-code: 241ms)
+ GET / 200 in 256ms (next.js: 14ms, application-code: 242ms)
+ GET / 200 in 277ms (next.js: 10ms, application-code: 267ms)
+ GET / 200 in 295ms (next.js: 8ms, application-code: 286ms)
+ GET / 200 in 276ms (next.js: 16ms, application-code: 260ms)
+ GET / 200 in 210ms (next.js: 14ms, application-code: 196ms)
+ GET /?boardId=legacy_unassigned_board 200 in 288ms (next.js: 8ms, application-code: 280ms)
+ GET /?boardId=cmoqzcb8i0004ij84kzisrnwy 200 in 71ms (next.js: 2ms, application-code: 68ms)
+ GET /?boardId=legacy_unassigned_board 200 in 84ms (next.js: 3ms, application-code: 82ms)
+ GET /?boardId=legacy_unassigned_board 200 in 99ms (next.js: 12ms, application-code: 88ms)
+✓ Compiled in 104ms
+ PATCH /api/goals/seed-docs?boardId=legacy_unassigned_board 200 in 1501ms (next.js: 1457ms, application-code: 43ms)
+ GET /api/next?boardId=legacy_unassigned_board 200 in 166ms (next.js: 144ms, application-code: 22ms)
+✓ Compiled in 43ms
+[browser] [React Flow]: It looks like you've created a new nodeTypes or edgeTypes object. If this wasn't on purpose please define the nodeTypes/edgeTypes outside of the component or memoize them. Help: https://reactflow.dev/error#002
+[browser] [React Flow]: It looks like you've created a new nodeTypes or edgeTypes object. If this wasn't on purpose please define the nodeTypes/edgeTypes outside of the component or memoize them. Help: https://reactflow.dev/error#002
+✓ Compiled in 28ms
+[browser] [React Flow]: It looks like you've created a new nodeTypes or edgeTypes object. If this wasn't on purpose please define the nodeTypes/edgeTypes outside of the component or memoize them. Help: https://reactflow.dev/error#002
+[browser] [React Flow]: It looks like you've created a new nodeTypes or edgeTypes object. If this wasn't on purpose please define the nodeTypes/edgeTypes outside of the component or memoize them. Help: https://reactflow.dev/error#002

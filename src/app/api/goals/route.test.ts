@@ -10,6 +10,16 @@ vi.mock("@/server/db", () => ({
   prisma: mockPrisma,
 }));
 
+vi.mock("@/server/auth-session", () => ({
+  getSessionUser: vi.fn().mockResolvedValue({ id: "u1", email: "u@example.com", name: null }),
+}));
+
+vi.mock("@/server/board-access", () => ({
+  getBoardIdFromRequest: vi.fn().mockReturnValue("b1"),
+  getUserBoardRole: vi.fn().mockResolvedValue("OWNER"),
+  boardRoleSatisfies: vi.fn().mockReturnValue(true),
+}));
+
 describe("POST /api/goals", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -27,7 +37,7 @@ describe("POST /api/goals", () => {
     });
 
     const { POST } = await import("./route");
-    const request = new Request("http://localhost/api/goals", {
+    const request = new Request("http://localhost/api/goals?boardId=b1", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ title: "My goal" }),
@@ -40,6 +50,7 @@ describe("POST /api/goals", () => {
     expect(payload.id).toBe("g1");
     expect(mockPrisma.goal.create).toHaveBeenCalledWith({
       data: {
+        boardId: "b1",
         title: "My goal",
         description: "",
         type: "TASK",
@@ -52,7 +63,7 @@ describe("POST /api/goals", () => {
 
   it("returns 400 for invalid payload", async () => {
     const { POST } = await import("./route");
-    const request = new Request("http://localhost/api/goals", {
+    const request = new Request("http://localhost/api/goals?boardId=b1", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ title: "" }),

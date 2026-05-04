@@ -14,6 +14,16 @@ vi.mock("@/server/db", () => ({
   prisma: mockPrisma,
 }));
 
+vi.mock("@/server/auth-session", () => ({
+  getSessionUser: vi.fn().mockResolvedValue({ id: "u1", email: "u@example.com", name: null }),
+}));
+
+vi.mock("@/server/board-access", () => ({
+  getBoardIdFromRequest: vi.fn().mockReturnValue("b1"),
+  getUserBoardRole: vi.fn().mockResolvedValue("OWNER"),
+  boardRoleSatisfies: vi.fn().mockReturnValue(true),
+}));
+
 describe("POST /api/edges", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -30,7 +40,7 @@ describe("POST /api/edges", () => {
     });
 
     const { POST } = await import("./route");
-    const request = new Request("http://localhost/api/edges", {
+    const request = new Request("http://localhost/api/edges?boardId=b1", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ sourceId: "a", targetId: "b" }),
@@ -45,7 +55,7 @@ describe("POST /api/edges", () => {
 
   it("rejects self-edge", async () => {
     const { POST } = await import("./route");
-    const request = new Request("http://localhost/api/edges", {
+    const request = new Request("http://localhost/api/edges?boardId=b1", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ sourceId: "a", targetId: "a" }),
@@ -59,7 +69,7 @@ describe("POST /api/edges", () => {
     mockPrisma.goal.count.mockResolvedValueOnce(1).mockResolvedValueOnce(0);
 
     const { POST } = await import("./route");
-    const request = new Request("http://localhost/api/edges", {
+    const request = new Request("http://localhost/api/edges?boardId=b1", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ sourceId: "a", targetId: "b" }),
@@ -78,7 +88,7 @@ describe("POST /api/edges", () => {
     mockPrisma.goalEdge.create.mockRejectedValueOnce({ code: "P2002" });
 
     const { POST } = await import("./route");
-    const request = new Request("http://localhost/api/edges", {
+    const request = new Request("http://localhost/api/edges?boardId=b1", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ sourceId: "a", targetId: "b" }),
@@ -99,7 +109,7 @@ describe("POST /api/edges", () => {
     ]);
 
     const { POST } = await import("./route");
-    const request = new Request("http://localhost/api/edges", {
+    const request = new Request("http://localhost/api/edges?boardId=b1", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ sourceId: "a", targetId: "c", type: "REQUIRES" }),

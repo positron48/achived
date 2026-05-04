@@ -13,6 +13,16 @@ vi.mock("@/server/db", () => ({
   prisma: mockPrisma,
 }));
 
+vi.mock("@/server/auth-session", () => ({
+  getSessionUser: vi.fn().mockResolvedValue({ id: "u1", email: "u@example.com", name: null }),
+}));
+
+vi.mock("@/server/board-access", () => ({
+  getBoardIdFromRequest: vi.fn().mockReturnValue("b1"),
+  getUserBoardRole: vi.fn().mockResolvedValue("OWNER"),
+  boardRoleSatisfies: vi.fn().mockReturnValue(true),
+}));
+
 describe("GET /api/next", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -62,7 +72,7 @@ describe("GET /api/next", () => {
     ]);
 
     const { GET } = await import("./route");
-    const response = await GET();
+    const response = await GET(new Request("http://localhost/api/next?boardId=b1"));
     const payload = await response.json();
 
     expect(response.status).toBe(200);

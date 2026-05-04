@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 
+import { boardRoleSatisfies, getBoardIdFromRequest, getUserBoardRole } from "@/server/board-access";
+import { getSessionUser } from "@/server/auth-session";
 import { prisma } from "@/server/db";
-import { hasPrismaCode } from "@/server/prisma-errors";
 import { updateGoalSchema } from "@/server/validation";
 
 type Context = {
@@ -11,6 +12,21 @@ type Context = {
 };
 
 export async function PATCH(request: Request, { params }: Context) {
+  const user = await getSessionUser();
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const boardId = getBoardIdFromRequest(request);
+  if (!boardId) {
+    return NextResponse.json({ error: "boardId is required" }, { status: 400 });
+  }
+
+  const role = await getUserBoardRole(boardId, user.id);
+  if (!role || !boardRoleSatisfies(role, "EDITOR")) {
+    return NextResponse.json({ error: "Board not found or access denied" }, { status: 403 });
+  }
+
   const { id } = await params;
   const body = await request.json().catch(() => null);
   const parsed = updateGoalSchema.safeParse(body);
@@ -29,36 +45,43 @@ export async function PATCH(request: Request, { params }: Context) {
     );
   }
 
-  try {
-    const updated = await prisma.goal.update({
-      where: { id },
-      data: parsed.data,
-    });
-
-    return NextResponse.json(updated);
-  } catch (error) {
-    if (hasPrismaCode(error, "P2025")) {
-      return NextResponse.json({ error: "Goal not found" }, { status: 404 });
-    }
-
-    throw error;
+  const updatedCount = await prisma.goal.updateMany({
+    where: { id, boardId },
+    data: parsed.data,
+  });
+  if (updatedCount.count === 0) {
+    return NextResponse.json({ error: "Goal not found" }, { status: 404 });
   }
+
+  const updated = await prisma.goal.findFirst({
+    where: { id, boardId },
+  });
+  return NextResponse.json(updated);
 }
 
-export async function DELETE(_: Request, { params }: Context) {
-  const { id } = await params;
-
-  try {
-    await prisma.goal.delete({
-      where: { id },
-    });
-
-    return new NextResponse(null, { status: 204 });
-  } catch (error) {
-    if (hasPrismaCode(error, "P2025")) {
-      return NextResponse.json({ error: "Goal not found" }, { status: 404 });
-    }
-
-    throw error;
+export async function DELETE(request: Request, { params }: Context) {
+  const user = await getSessionUser();
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+
+  const boardId = getBoardIdFromRequest(request);
+  if (!boardId) {
+    return NextResponse.json({ error: "boardId is required" }, { status: 400 });
+  }
+
+  const role = await getUserBoardRole(boardId, user.id);
+  if (!role || !boardRoleSatisfies(role, "EDITOR")) {
+    return NextResponse.json({ error: "Board not found or access denied" }, { status: 403 });
+  }
+
+  const { id } = await params;
+  const deleted = await prisma.goal.deleteMany({
+    where: { id, boardId },
+  });
+  if (deleted.count === 0) {
+    return NextResponse.json({ error: "Goal not found" }, { status: 404 });
+  }
+
+  return new NextResponse(null, { status: 204 });
 }

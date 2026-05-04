@@ -27,6 +27,24 @@ export type GraphResponse = {
   edges: ApiEdge[];
 };
 
+export type BoardRole = "OWNER" | "EDITOR" | "VIEWER";
+
+export type BoardSummary = {
+  id: string;
+  title: string;
+  role: BoardRole;
+  isPublicReadOnly: boolean;
+  publicShareToken: string | null;
+};
+
+export type BoardMemberItem = {
+  id: string;
+  userId: string;
+  email: string;
+  name: string | null;
+  role: "EDITOR" | "VIEWER";
+};
+
 export type GoalBlocker = {
   id: string;
   title: string;

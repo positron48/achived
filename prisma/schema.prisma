@@ -9,6 +9,8 @@ datasource db {
 
 model Goal {
   id            String      @id @default(cuid())
+  boardId       String?
+  board         Board?      @relation(fields: [boardId], references: [id], onDelete: Cascade)
   title         String
   description   String      @default("")
   status        GoalStatus  @default(TODO)
@@ -20,10 +22,14 @@ model Goal {
   updatedAt     DateTime    @updatedAt
   outgoingEdges GoalEdge[]  @relation("SourceGoal")
   incomingEdges GoalEdge[]  @relation("TargetGoal")
+
+  @@index([boardId])
 }
 
 model GoalEdge {
   id        String   @id @default(cuid())
+  boardId   String?
+  board     Board?   @relation(fields: [boardId], references: [id], onDelete: Cascade)
   sourceId  String
   targetId  String
   source    Goal     @relation("SourceGoal", fields: [sourceId], references: [id], onDelete: Cascade)
@@ -31,7 +37,70 @@ model GoalEdge {
   type      EdgeType @default(REQUIRES)
   createdAt DateTime @default(now())
 
-  @@unique([sourceId, targetId, type])
+  @@unique([boardId, sourceId, targetId, type])
+  @@index([boardId])
+}
+
+model User {
+  id           String        @id @default(cuid())
+  email        String        @unique
+  name         String?
+  avatarUrl    String?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  authAccounts AuthAccount[]
+  ownedBoards  Board[]       @relation("BoardOwner")
+  boardMembers BoardMember[]
+}
+
+model AuthAccount {
+  id                String   @id @default(cuid())
+  userId            String
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider          String
+  providerAccountId String
+  accessToken       String?
+  refreshToken      String?
+  expiresAt         Int?
+  tokenType         String?
+  scope             String?
+  idToken           String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Board {
+  id                String        @id @default(cuid())
+  ownerId           String?
+  owner             User?         @relation("BoardOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  title             String
+  isPublicReadOnly  Boolean       @default(false)
+  publicShareToken  String?       @unique
+  isLegacyUnclaimed Boolean       @default(false)
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  goals             Goal[]
+  edges             GoalEdge[]
+  members           BoardMember[]
+
+  @@index([ownerId])
+}
+
+model BoardMember {
+  id        String     @id @default(cuid())
+  boardId   String
+  board     Board      @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      MemberRole @default(VIEWER)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  @@unique([boardId, userId])
+  @@index([userId])
 }
 
 enum GoalStatus {
@@ -52,4 +121,9 @@ enum GoalType {
 enum EdgeType {
   REQUIRES
   RELATED
+}
+
+enum MemberRole {
+  VIEWER
+  EDITOR
 }
