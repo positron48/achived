@@ -636,6 +636,10 @@ type GoalGraphClientInnerProps = {
   initialNext: NextGoalItem[];
 };
 
+type FlowContextMenuState =
+  | { kind: "node"; clientX: number; clientY: number; nodeId: string }
+  | { kind: "pane"; clientX: number; clientY: number; flowX: number; flowY: number };
+
 function GoalGraphClientInner({
   boards,
   currentBoardId,
@@ -683,6 +687,8 @@ function GoalGraphClientInner({
   const [rightSidebarOpen, setRightSidebarOpen] = useState(true);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const userMenuRef = useRef<HTMLDivElement | null>(null);
+  const [flowContextMenu, setFlowContextMenu] = useState<FlowContextMenuState | null>(null);
+  const flowContextMenuRef = useRef<HTMLDivElement | null>(null);
   const prevLeftSidebarOpenRef = useRef(leftSidebarOpen);
 
   useLayoutEffect(() => {
@@ -763,6 +769,28 @@ function GoalGraphClientInner({
       document.removeEventListener("keydown", onKeyDown);
     };
   }, [userMenuOpen]);
+
+  useEffect(() => {
+    if (!flowContextMenu) return;
+
+    const onPointerDown = (event: MouseEvent) => {
+      if (flowContextMenuRef.current?.contains(event.target as unknown as globalThis.Node)) return;
+      setFlowContextMenu(null);
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setFlowContextMenu(null);
+      }
+    };
+
+    window.addEventListener("mousedown", onPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("mousedown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [flowContextMenu]);
 
   useLayoutEffect(() => {
     if (!openDetailDropdown) {
@@ -927,36 +955,43 @@ function GoalGraphClientInner({
     }
   }, [withBoard]);
 
-  const createGoal = useCallback(async () => {
-    if (!isEditor) {
-      setError("У вас только read-only доступ к этой доске.");
-      return;
-    }
+  const createGoalWithPosition = useCallback(
+    async (x: number, y: number) => {
+      if (!isEditor) {
+        setError("У вас только read-only доступ к этой доске.");
+        return;
+      }
 
-    const title = window.prompt("Название новой цели");
-    if (!title?.trim()) return;
-    const { x, y } = getNextGoalPosition();
+      const title = window.prompt("Название новой цели");
+      if (!title?.trim()) return;
 
-    setError(null);
-    try {
-      const response = await fetch(withBoard("/api/goals"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title: title.trim(),
-          type: "TASK",
-          priority: 3,
-          x,
-          y,
-        }),
-      });
-      const goal = await parseJson<ApiGoal>(response);
-      setNodes((prev) => applyComputedStates([...prev, toFlowNode(goal)], edges));
-      void loadNext();
-    } catch (createError) {
-      setError(createError instanceof Error ? createError.message : "Failed to create goal");
-    }
-  }, [edges, getNextGoalPosition, isEditor, loadNext, withBoard]);
+      setError(null);
+      try {
+        const response = await fetch(withBoard("/api/goals"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: title.trim(),
+            type: "TASK",
+            priority: 3,
+            x,
+            y,
+          }),
+        });
+        const goal = await parseJson<ApiGoal>(response);
+        setNodes((prev) => applyComputedStates([...prev, toFlowNode(goal)], edges));
+        void loadNext();
+      } catch (createError) {
+        setError(createError instanceof Error ? createError.message : "Failed to create goal");
+      }
+    },
+    [edges, isEditor, loadNext, withBoard],
+  );
+
+  const createGoal = useCallback(() => {
+    const pos = getNextGoalPosition();
+    void createGoalWithPosition(pos.x, pos.y);
+  }, [createGoalWithPosition, getNextGoalPosition]);
 
   const updateGoal = useCallback(
     async (
@@ -1010,33 +1045,37 @@ function GoalGraphClientInner({
   const updateGoalRef = useRef(updateGoal);
   updateGoalRef.current = updateGoal;
 
-  const deleteGoal = useCallback(async () => {
-    if (!isEditor) {
-      setError("У вас только read-only доступ к этой доске.");
-      return;
-    }
-    if (!selectedGoalId) return;
-    if (!window.confirm("Удалить цель и связанные связи?")) return;
-    setError(null);
-
-    try {
-      const response = await fetch(withBoard(`/api/goals/${selectedGoalId}`), {
-        method: "DELETE",
-      });
-      if (!response.ok) {
-        throw new Error("Failed to delete goal");
+  const deleteGoalById = useCallback(
+    async (goalId: string) => {
+      if (!isEditor) {
+        setError("У вас только read-only доступ к этой доске.");
+        return;
       }
-      setNodes((prev) => prev.filter((node) => node.id !== selectedGoalId));
-      const nextEdges = edges.filter(
-        (edge) => edge.source !== selectedGoalId && edge.target !== selectedGoalId,
-      );
-      setEdges(nextEdges);
-      setSelectedGoalId(null);
-      void loadNext();
-    } catch (deleteError) {
-      setError(deleteError instanceof Error ? deleteError.message : "Failed to delete goal");
-    }
-  }, [edges, isEditor, loadNext, selectedGoalId, withBoard]);
+      if (!window.confirm("Удалить цель и связанные связи?")) return;
+      setError(null);
+
+      try {
+        const response = await fetch(withBoard(`/api/goals/${goalId}`), {
+          method: "DELETE",
+        });
+        if (!response.ok) {
+          throw new Error("Failed to delete goal");
+        }
+        setNodes((prev) => prev.filter((node) => node.id !== goalId));
+        setEdges((prev) => prev.filter((edge) => edge.source !== goalId && edge.target !== goalId));
+        setSelectedGoalId((prev) => (prev === goalId ? null : prev));
+        void loadNext();
+      } catch (deleteError) {
+        setError(deleteError instanceof Error ? deleteError.message : "Failed to delete goal");
+      }
+    },
+    [isEditor, loadNext, withBoard],
+  );
+
+  const deleteGoal = useCallback(async () => {
+    if (!selectedGoalId) return;
+    await deleteGoalById(selectedGoalId);
+  }, [deleteGoalById, selectedGoalId]);
 
   const onNodesChange = useCallback((changes: NodeChange<Node<GoalNodeData>>[]) => {
     setNodes((prev) => applyNodeChanges<Node<GoalNodeData>>(changes, prev));
@@ -1091,6 +1130,40 @@ function GoalGraphClientInner({
   const onNodeClick = useCallback<NodeMouseHandler<Node<GoalNodeData>>>((_, node) => {
     setSelectedGoalId(node.id);
   }, []);
+
+  const onNodeContextMenu = useCallback<NodeMouseHandler<Node<GoalNodeData>>>(
+    (event, node) => {
+      event.preventDefault();
+      if (!isEditor || isPublicView) return;
+      setFlowContextMenu({
+        kind: "node",
+        clientX: event.clientX,
+        clientY: event.clientY,
+        nodeId: node.id,
+      });
+      setSelectedGoalId(node.id);
+    },
+    [isEditor, isPublicView],
+  );
+
+  const onPaneContextMenu = useCallback(
+    (event: ReactMouseEvent | globalThis.MouseEvent) => {
+      event.preventDefault();
+      if (!isEditor || isPublicView) return;
+      const flowPoint = reactFlow.screenToFlowPosition({
+        x: event.clientX,
+        y: event.clientY,
+      });
+      setFlowContextMenu({
+        kind: "pane",
+        clientX: event.clientX,
+        clientY: event.clientY,
+        flowX: flowPoint.x - DEFAULT_NODE_WIDTH / 2,
+        flowY: flowPoint.y - DEFAULT_NODE_HEIGHT / 2,
+      });
+    },
+    [isEditor, isPublicView, reactFlow],
+  );
 
   const onNodeDragStop = useCallback(
     async (_event: ReactMouseEvent, node: Node<GoalNodeData>, draggedNodes: Node<GoalNodeData>[]) => {
@@ -1235,6 +1308,24 @@ function GoalGraphClientInner({
       await updateGoal(goalId, patch);
     },
     [isEditor, selectedGoalNode, setNodeField, updateGoal],
+  );
+
+  const applyGoalStatusFromContextMenu = useCallback(
+    async (goalId: string, status: GoalStatus) => {
+      setFlowContextMenu(null);
+      if (!isEditor) return;
+      setNodeField(goalId, { status });
+      await updateGoal(goalId, { status });
+    },
+    [isEditor, setNodeField, updateGoal],
+  );
+
+  const deleteGoalFromContextMenu = useCallback(
+    async (goalId: string) => {
+      setFlowContextMenu(null);
+      await deleteGoalById(goalId);
+    },
+    [deleteGoalById],
   );
 
   const createBoard = useCallback(async (title: string) => {
@@ -1684,7 +1775,12 @@ function GoalGraphClientInner({
             onConnectStart={onConnectStart}
             onConnectEnd={onConnectEnd}
             onEdgeDoubleClick={onEdgeDoubleClick}
-            onPaneClick={() => setSelectedGoalId(null)}
+            onNodeContextMenu={onNodeContextMenu}
+            onPaneContextMenu={onPaneContextMenu}
+            onPaneClick={() => {
+              setSelectedGoalId(null);
+              setFlowContextMenu(null);
+            }}
             defaultEdgeOptions={{
               type: "boundaryStraight",
               style: { stroke: EDGE_STROKE, strokeWidth: EDGE_WIDTH },
@@ -2026,6 +2122,73 @@ function GoalGraphClientInner({
           </button>
         ) : null}
       </div>
+
+      {flowContextMenu && isEditor && !isPublicView
+        ? createPortal(
+            <div
+              ref={flowContextMenuRef}
+              role="menu"
+              className="fixed z-[600] max-h-[min(420px,calc(100vh-16px))] min-w-[208px] overflow-y-auto overflow-x-hidden rounded-xl border border-white/10 bg-[#171918] py-1 shadow-[0_16px_48px_rgba(0,0,0,.55)]"
+              style={{
+                left: Math.min(globalThis.window.innerWidth - 216, Math.max(8, flowContextMenu.clientX)),
+                top: Math.min(globalThis.window.innerHeight - 48, Math.max(8, flowContextMenu.clientY)),
+              }}
+              onContextMenu={(event) => event.preventDefault()}
+            >
+              {flowContextMenu.kind === "node" ? (
+                <>
+                  <p className="border-b border-white/10 px-3 py-2 text-[10px] font-medium uppercase tracking-[0.06em] text-[#8A857B]">
+                    Статус
+                  </p>
+                  {statusOptions.map((status) => {
+                    const current = nodes.find((n) => n.id === flowContextMenu.nodeId)?.data.status;
+                    const isCurrent = current === status;
+                    return (
+                      <button
+                        key={status}
+                        type="button"
+                        role="menuitem"
+                        className={`flex w-full px-3 py-2 text-left text-sm ${
+                          isCurrent
+                            ? "bg-[#D39A43]/14 text-[#F2EEE6]"
+                            : "text-[#D8C8A8] hover:bg-white/10"
+                        }`}
+                        onClick={() => void applyGoalStatusFromContextMenu(flowContextMenu.nodeId, status)}
+                      >
+                        {statusLabel[status]}
+                      </button>
+                    );
+                  })}
+                  <div className="my-1 border-t border-white/10" />
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="flex w-full px-3 py-2 text-left text-sm text-[#F0B0A0] hover:bg-[#A94F3D]/20"
+                    onClick={() => void deleteGoalFromContextMenu(flowContextMenu.nodeId)}
+                  >
+                    Удалить карточку
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="flex w-full px-3 py-2 text-left text-sm text-[#D8C8A8] hover:bg-white/10"
+                    onClick={() => {
+                      const pos = flowContextMenu;
+                      setFlowContextMenu(null);
+                      void createGoalWithPosition(pos.flowX, pos.flowY);
+                    }}
+                  >
+                    Добавить карточку
+                  </button>
+                </>
+              )}
+            </div>,
+            document.body,
+          )
+        : null}
 
       {boardModalMode ? (
         <Modal
