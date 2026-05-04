@@ -17,6 +17,7 @@ import {
   Position,
   ReactFlow,
   ReactFlowProvider,
+  useReactFlow,
   useInternalNode,
   type Edge,
   type EdgeChange,
@@ -26,7 +27,7 @@ import {
   type OnConnect,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 
 import type {
   ApiEdge,
@@ -546,6 +547,8 @@ type GoalGraphClientInnerProps = {
 };
 
 function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInnerProps) {
+  const reactFlow = useReactFlow<Node<GoalNodeData>, Edge>();
+  const flowSectionRef = useRef<HTMLElement | null>(null);
   const [nodes, setNodes] = useState<Node<GoalNodeData>[]>(() =>
     buildFlowNodes(initialGraph.goals, initialGraph.edges),
   );
@@ -626,14 +629,21 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
   const doneCount = nodes.filter((node) => node.data.computedState === "DONE").length;
 
   const getNextGoalPosition = useCallback(() => {
-    const index = nodes.length;
-    const column = index % 4;
-    const row = Math.floor(index / 4);
+    const flowSection = flowSectionRef.current;
+    if (!flowSection) {
+      return { x: 120, y: 120 };
+    }
+
+    const bounds = flowSection.getBoundingClientRect();
+    const centerPosition = reactFlow.screenToFlowPosition({
+      x: bounds.left + bounds.width / 2,
+      y: bounds.top + bounds.height / 2,
+    });
     return {
-      x: 120 + column * 260,
-      y: 120 + row * 140,
+      x: centerPosition.x - DEFAULT_NODE_WIDTH / 2,
+      y: centerPosition.y - DEFAULT_NODE_HEIGHT / 2,
     };
-  }, [nodes.length]);
+  }, [reactFlow]);
 
   const loadGraph = useCallback(async () => {
     setIsLoading(true);
@@ -1041,7 +1051,7 @@ function GoalGraphClientInner({ initialGraph, initialNext }: GoalGraphClientInne
           </div>
         </aside>
 
-        <section className="goal-graph-flow relative h-full min-w-0 flex-1">
+        <section ref={flowSectionRef} className="goal-graph-flow relative h-full min-w-0 flex-1">
           {error ? (
             <div className="absolute left-4 top-4 z-10 rounded-xl border border-[#A94F3D]/40 bg-[#2A1A18] px-3 py-2 text-sm text-[#F3B1A4]">
               {error}

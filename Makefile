@@ -1,4 +1,4 @@
-.PHONY: up down seed
+.PHONY: up down seed check
 
 APP_PORT ?= 3001
 MAX_PORT ?= 3999
@@ -30,3 +30,15 @@ down:
 seed:
 	@docker compose exec app npm run prisma:seed
 	@echo "Seed применён."
+
+check:
+	@echo "==> npm run lint"
+	@npm run lint
+	@echo "==> npm run test:run"
+	@npm run test:run
+	@echo "==> npm run build"
+	@npm run build
+	@echo "==> docker build (аналог CI)"
+	@docker build --file Dockerfile --tag goalgraph:check .
+	@echo ""
+	@echo "Все проверки пройдены: локальные и Docker (CI-аналог)."
