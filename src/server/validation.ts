@@ -1,7 +1,14 @@
 import { z } from "zod";
 
+/** Без `.trim()`: иначе при PATCH теряются пробелы в конце/начале, пока пользователь печатает. */
+const goalTitleValue = z
+  .string()
+  .min(1)
+  .max(120)
+  .refine((s) => s.trim().length > 0, { message: "empty title" });
+
 export const createGoalSchema = z.object({
-  title: z.string().trim().min(1).max(120),
+  title: goalTitleValue,
   description: z.string().max(5000).optional(),
   type: z.enum(["EPIC", "MILESTONE", "TASK", "HABIT"]).optional(),
   priority: z.number().int().min(1).max(5).optional(),

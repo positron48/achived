@@ -263,10 +263,22 @@ const priorityLabel = (priority: number) => {
   return "Низкий";
 };
 
+/** Оттенки по уровням 1…5, чтобы отличать 2/3 (средние) и 4/5 (высокие). */
 const priorityTone = (priority: number) => {
-  if (priority >= 4) return "text-[#D47758]";
-  if (priority >= 2) return "text-[#D39A43]";
-  return "text-[#8B944C]";
+  switch (priority) {
+    case 1:
+      return "text-[#8B944C]";
+    case 2:
+      return "text-[#9E8A38]";
+    case 3:
+      return "text-[#C9A030]";
+    case 4:
+      return "text-[#D4654A]";
+    case 5:
+      return "text-[#E24A32]";
+    default:
+      return "text-[#D39A43]";
+  }
 };
 
 const stateTone: Record<
@@ -1165,10 +1177,25 @@ function GoalGraphClientInner({
     left: number;
     width: number;
   } | null>(null);
+  const [editingCardTitle, setEditingCardTitle] = useState(false);
+  const cardTitleInputRef = useRef<HTMLInputElement | null>(null);
   const selectGoalId = useCallback((goalId: string | null) => {
     setOpenDetailDropdown(null);
     setSelectedGoalId(goalId);
   }, []);
+
+  useLayoutEffect(() => {
+    if (!editingCardTitle) return;
+    const el = cardTitleInputRef.current;
+    if (!el) return;
+    el.focus();
+    el.select();
+  }, [editingCardTitle]);
+
+  useEffect(() => {
+    setEditingCardTitle(false);
+  }, [selectedGoalId]);
+
   const detailDropdownTriggersRef = useRef<HTMLDivElement | null>(null);
   const detailDropdownMenuRef = useRef<HTMLDivElement | null>(null);
   const detailStatusAnchorRef = useRef<HTMLButtonElement | null>(null);
@@ -2414,8 +2441,8 @@ function GoalGraphClientInner({
                       onClick={() => focusGoal(goal.id)}
                     >
                       <p className="truncate text-sm font-medium text-[#F2EEE6]">{goal.title}</p>
-                      <div className="mt-1 flex items-center justify-between text-[11px] text-[#B8B0A3]">
-                        <span>{typeLabel[goal.type]}</span>
+                      <div className="mt-1 flex items-center justify-between text-[11px]">
+                        <span className="text-[#B8B0A3]">{typeLabel[goal.type]}</span>
                         <span className={priorityTone(goal.priority)}>⚑ {priorityLabel(goal.priority)}</span>
                       </div>
                       <span className="mt-2 inline-flex rounded-full bg-[#8B944C]/20 px-2 py-0.5 text-[10px] text-[#C7D39B]">
@@ -2512,7 +2539,9 @@ function GoalGraphClientInner({
             nodesConnectable={isEditor}
             snapToGrid={isEditor && gridSnapEnabled && !ctrlHeldForSnapBypass}
             snapGrid={[BACKGROUND_GRID_GAP, BACKGROUND_GRID_GAP]}
+            minZoom={0.06}
             fitView
+            fitViewOptions={{ minZoom: 0.06 }}
           >
             <Background gap={BACKGROUND_GRID_GAP} size={1} color="rgba(216, 200, 168, 0.3)" />
             <MiniMap
@@ -2636,8 +2665,39 @@ function GoalGraphClientInner({
           {selectedGoalNode ? (
             <div className="space-y-4">
               <div className="flex items-start justify-between gap-3">
-                <div>
-                  <h2 className="text-2xl font-semibold text-[#F2EEE6]">{selectedTitle}</h2>
+                <div className="min-w-0 flex-1">
+                  {editingCardTitle && isEditor ? (
+                    <input
+                      ref={cardTitleInputRef}
+                      className="w-full rounded-md border border-[#D39A43]/35 bg-[#181B1A] px-1 py-0.5 text-2xl font-semibold text-[#F2EEE6] outline-none focus:border-[#D39A43]/55"
+                      value={selectedTitle}
+                      aria-label="Название цели"
+                      disabled={!isEditor}
+                      onChange={(event) =>
+                        setNodeField(selectedGoalNode.id, { title: event.target.value })
+                      }
+                      onBlur={() => setEditingCardTitle(false)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          setEditingCardTitle(false);
+                        }
+                      }}
+                    />
+                  ) : (
+                    <h2
+                      className={`break-words text-2xl font-semibold text-[#F2EEE6] ${
+                        isEditor
+                          ? "cursor-text rounded-md px-1 py-0.5 hover:bg-white/[0.06]"
+                          : ""
+                      }`}
+                      onClick={() => {
+                        if (isEditor) setEditingCardTitle(true);
+                      }}
+                    >
+                      {selectedTitle || "Без названия"}
+                    </h2>
+                  )}
                 </div>
                 <button
                   type="button"
@@ -2663,7 +2723,7 @@ function GoalGraphClientInner({
                 >
                   <span className="text-xs text-[#B8B0A3]">Статус</span>
                   <span className="flex items-center gap-2">
-                    <span className="rounded-full border border-[#D39A43]/45 bg-[#D39A43]/12 px-2 py-0.5 text-xs text-[#D8C8A8]">
+                    <span className="text-sm font-medium text-[#D8C8A8]">
                       {statusLabel[selectedStatus]}
                     </span>
                     <span className="text-[10px] text-[#8A857B]" aria-hidden>
@@ -2792,16 +2852,6 @@ function GoalGraphClientInner({
                     document.body,
                   )
                 : null}
-
-              <label className="block text-xs text-[#B8B0A3]">
-                Название
-                <input
-                  className="mt-1 h-10 w-full rounded-xl border border-white/10 bg-[#181B1A] px-3 text-sm text-[#F2EEE6] outline-none focus:border-[#D39A43]/45"
-                  value={selectedTitle}
-                  disabled={!isEditor}
-                  onChange={(event) => setNodeField(selectedGoalNode.id, { title: event.target.value })}
-                />
-              </label>
 
               <label className="block text-xs text-[#B8B0A3]">
                 Описание

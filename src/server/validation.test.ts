@@ -22,6 +22,22 @@ describe("validation schemas", () => {
     expect(parsed.success).toBe(false);
   });
 
+  it("keeps leading and trailing spaces in title (no zod trim)", () => {
+    const parsed = createGoalSchema.safeParse({
+      title: "  важный пробел  ",
+      type: "TASK",
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.title).toBe("  важный пробел  ");
+    }
+  });
+
+  it("rejects whitespace-only title", () => {
+    const parsed = createGoalSchema.safeParse({ title: " \t " });
+    expect(parsed.success).toBe(false);
+  });
+
   it("accepts update status", () => {
     const parsed = updateGoalSchema.safeParse({
       status: "DONE",
