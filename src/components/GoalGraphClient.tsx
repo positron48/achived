@@ -715,6 +715,7 @@ function GoalGraphClientInner({
   const [nodes, setNodes] = useState<Node<GoalNodeData>[]>(() =>
     buildFlowNodes(initialGraph.goals, initialGraph.edges),
   );
+  const nodesRef = useRef(nodes);
   const [edges, setEdges] = useState<Edge[]>(() => initialGraph.edges.map(toFlowEdge));
   const [nextGoals, setNextGoals] = useState<NextGoalItem[]>(initialNext);
   const [isLoading, setIsLoading] = useState(false);
@@ -738,6 +739,10 @@ function GoalGraphClientInner({
     left: number;
     width: number;
   } | null>(null);
+  const selectGoalId = useCallback((goalId: string | null) => {
+    setOpenDetailDropdown(null);
+    setSelectedGoalId(goalId);
+  }, []);
   const detailDropdownTriggersRef = useRef<HTMLDivElement | null>(null);
   const detailDropdownMenuRef = useRef<HTMLDivElement | null>(null);
   const detailStatusAnchorRef = useRef<HTMLButtonElement | null>(null);
@@ -781,9 +786,9 @@ function GoalGraphClientInner({
     };
   }, [error]);
 
-  useEffect(() => {
-    setOpenDetailDropdown(null);
-  }, [selectedGoalId]);
+  useLayoutEffect(() => {
+    nodesRef.current = nodes;
+  }, [nodes]);
 
   useEffect(() => {
     if (!openDetailDropdown) return;
@@ -855,7 +860,6 @@ function GoalGraphClientInner({
 
   useLayoutEffect(() => {
     if (!openDetailDropdown) {
-      setDetailMenuBox(null);
       return;
     }
 
@@ -899,9 +903,6 @@ function GoalGraphClientInner({
     () => nodes.find((node) => node.id === selectedGoalId) ?? null,
     [nodes, selectedGoalId],
   );
-
-  const nodesRef = useRef(nodes);
-  nodesRef.current = nodes;
 
   const goalTextSyncedRef = useRef<{ id: string; title: string; description: string } | null>(null);
   const nodeTypes = useMemo(() => ({ goalNode: GoalNode }), []);
@@ -969,9 +970,12 @@ function GoalGraphClientInner({
   const blockedCount = blockedGoals.length;
   const doneCount = nodes.filter((node) => node.data.computedState === "DONE").length;
 
-  const focusGoal = useCallback((goalId: string) => {
-    setSelectedGoalId(goalId);
-  }, []);
+  const focusGoal = useCallback(
+    (goalId: string) => {
+      selectGoalId(goalId);
+    },
+    [selectGoalId],
+  );
 
   const getNextGoalPosition = useCallback(() => {
     const flowSection = flowSectionRef.current;
@@ -1104,7 +1108,9 @@ function GoalGraphClientInner({
   );
 
   const updateGoalRef = useRef(updateGoal);
-  updateGoalRef.current = updateGoal;
+  useLayoutEffect(() => {
+    updateGoalRef.current = updateGoal;
+  }, [updateGoal]);
 
   const deleteGoalById = useCallback(
     async (goalId: string) => {
@@ -1124,6 +1130,7 @@ function GoalGraphClientInner({
         }
         setNodes((prev) => prev.filter((node) => node.id !== goalId));
         setEdges((prev) => prev.filter((edge) => edge.source !== goalId && edge.target !== goalId));
+        setOpenDetailDropdown(null);
         setSelectedGoalId((prev) => (prev === goalId ? null : prev));
         void loadNext();
       } catch (deleteError) {
@@ -1188,9 +1195,12 @@ function GoalGraphClientInner({
     setIsConnecting(false);
   }, []);
 
-  const onNodeClick = useCallback<NodeMouseHandler<Node<GoalNodeData>>>((_, node) => {
-    setSelectedGoalId(node.id);
-  }, []);
+  const onNodeClick = useCallback<NodeMouseHandler<Node<GoalNodeData>>>(
+    (_, node) => {
+      selectGoalId(node.id);
+    },
+    [selectGoalId],
+  );
 
   const onNodeContextMenu = useCallback<NodeMouseHandler<Node<GoalNodeData>>>(
     (event, node) => {
@@ -1202,9 +1212,9 @@ function GoalGraphClientInner({
         clientY: event.clientY,
         nodeId: node.id,
       });
-      setSelectedGoalId(node.id);
+      selectGoalId(node.id);
     },
-    [isEditor, isPublicView],
+    [isEditor, isPublicView, selectGoalId],
   );
 
   const onSelectionContextMenu = useCallback(
@@ -1235,9 +1245,9 @@ function GoalGraphClientInner({
         clientY: event.clientY,
         anchorNodeId,
       });
-      setSelectedGoalId(anchorNodeId);
+      selectGoalId(anchorNodeId);
     },
-    [isEditor, isPublicView, reactFlow],
+    [isEditor, isPublicView, reactFlow, selectGoalId],
   );
 
   const onPaneContextMenu = useCallback(
@@ -1337,6 +1347,8 @@ function GoalGraphClientInner({
       title: selectedGoalNode.data.title,
       description: selectedGoalNode.data.description,
     };
+    // Sync ref только при смене выбранной цели (id), не при каждом обновлении полей в nodes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedGoalNode?.id]);
 
   useEffect(() => {
@@ -1445,7 +1457,7 @@ function GoalGraphClientInner({
 
         const { width: w } = measuredGoalNodeSize(n);
 
-        let patch: { x?: number; y?: number } = {};
+        const patch: { x?: number; y?: number } = {};
 
         if (mode.layout === "row") {
           if (Math.abs(n.position.y - ay) > 0.5) patch.y = ay;
@@ -1510,6 +1522,7 @@ function GoalGraphClientInner({
       const idSet = new Set(ids);
       setNodes((prev) => prev.filter((node) => !idSet.has(node.id)));
       setEdges((prev) => prev.filter((edge) => !idSet.has(edge.source) && !idSet.has(edge.target)));
+      setOpenDetailDropdown(null);
       setSelectedGoalId((prev) => (prev && idSet.has(prev) ? null : prev));
       void loadNext();
     } catch (deleteError) {
@@ -1984,7 +1997,7 @@ function GoalGraphClientInner({
             onSelectionContextMenu={onSelectionContextMenu}
             onPaneContextMenu={onPaneContextMenu}
             onPaneClick={() => {
-              setSelectedGoalId(null);
+              selectGoalId(null);
               setFlowContextMenu(null);
             }}
             defaultEdgeOptions={{
@@ -2125,7 +2138,7 @@ function GoalGraphClientInner({
                   type="button"
                   className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-white/10 text-lg leading-none text-[#B8B0A3] hover:bg-white/5 hover:text-[#F2EEE6]"
                   aria-label="Закрыть"
-                  onClick={() => setSelectedGoalId(null)}
+                  onClick={() => selectGoalId(null)}
                 >
                   <span aria-hidden>×</span>
                 </button>
