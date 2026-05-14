@@ -31,6 +31,16 @@ describe("PATCH /api/goals/:id", () => {
     mockPrisma.goal.updateMany.mockResolvedValueOnce({ count: 1 });
     mockPrisma.goal.findFirst.mockResolvedValueOnce({
       id: "g1",
+      boardId: "b1",
+      title: "Old",
+      description: "",
+      type: "TASK",
+      startsOn: null,
+      priority: 3,
+      status: "TODO",
+    });
+    mockPrisma.goal.findFirst.mockResolvedValueOnce({
+      id: "g1",
       title: "Updated",
       priority: 1,
       status: "ACTIVE",

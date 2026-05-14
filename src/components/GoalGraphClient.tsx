@@ -261,6 +261,9 @@ const EdgeWaypointActionsContext = createContext<{
   updateWaypoints: (edgeId: string, waypoints: EdgeWaypoint[]) => void;
   /** Прилипание точек связи к сетке (узлы — через snapToGrid у React Flow). */
   gridSnapEnabled: boolean;
+  highlightedWaypointKeys: Set<string>;
+  selectedWaypointKeys: Set<string>;
+  toggleWaypointSelection: (edgeId: string, index: number, additive: boolean) => void;
 } | null>(null);
 
 /** Наконечник стрелки по направлению кривой у целевого узла (tangentUnit — единичный вектор «внутрь» к target). */
@@ -700,6 +703,8 @@ function BoundaryStraightEdge({
   );
 
   const showWaypointHandles = Boolean(selected && waypointActions?.isEditor && geometry);
+  const highlightedWaypointKeys = waypointActions?.highlightedWaypointKeys ?? new Set<string>();
+  const selectedWaypointKeys = waypointActions?.selectedWaypointKeys ?? new Set<string>();
 
   const segmentMidHandles = useMemo(() => {
     if (!showWaypointHandles || vertexChain.length < 2) return [];
@@ -771,7 +776,10 @@ function BoundaryStraightEdge({
               stroke="rgba(242,238,230,.85)"
               strokeWidth={1}
               style={{ cursor: "grab", pointerEvents: "all" }}
-              onPointerDown={beginWaypointDrag(() => [...committedWaypoints], index)}
+              onPointerDown={(event) => {
+                waypointActions?.toggleWaypointSelection(id, index, event.shiftKey);
+                beginWaypointDrag(() => [...committedWaypoints], index)(event);
+              }}
               onDoubleClick={(event: ReactMouseEvent<SVGCircleElement>) => {
                 event.preventDefault();
                 event.stopPropagation();
@@ -786,6 +794,24 @@ function BoundaryStraightEdge({
               <title>Перетащить · двойной клик или ПКМ — удалить точку</title>
             </circle>
           ))
+        : null}
+      {waypointActions?.isEditor
+        ? displayWaypoints.map((wp, index) => {
+            const key = `${id}:${index}`;
+            if (!highlightedWaypointKeys.has(key) && !selectedWaypointKeys.has(key)) return null;
+            return (
+              <circle
+                key={`hl-${key}`}
+                cx={wp.x}
+                cy={wp.y}
+                r={EDGE_HANDLE_RADIUS + 2}
+                fill="rgba(211,154,67,.22)"
+                stroke="rgba(211,154,67,.95)"
+                strokeWidth={1}
+                pointerEvents="none"
+              />
+            );
+          })
         : null}
 
       {showWaypointHandles
@@ -1241,6 +1267,7 @@ type GoalGraphClientInnerProps = {
   currentBoardRole: BoardRole;
   currentUserEmail: string | null;
   isPublicView?: boolean;
+  publicShareTokenFromPage?: string | null;
   publicBoardTitle?: string;
   initialGraph: GraphResponse;
   initialNext: NextGoalItem[];
@@ -1264,6 +1291,7 @@ function GoalGraphClientInner({
   currentBoardRole,
   currentUserEmail,
   isPublicView = false,
+  publicShareTokenFromPage = null,
   publicBoardTitle,
   initialGraph,
   initialNext,
@@ -1308,8 +1336,29 @@ function GoalGraphClientInner({
   /** Перетаскивание группы узлов: эталонные точки траектории для рёбер между двумя выбранными узлами. */
   const nodeDragWaypointsRef = useRef<{
     anchorStart: { x: number; y: number };
-    internalEdges: { id: string; waypoints: EdgeWaypoint[] }[];
+    internalEdges: { id: string; waypoints: EdgeWaypoint[]; movableIndexes: number[] }[];
   } | null>(null);
+  const [highlightedWaypointKeys, setHighlightedWaypointKeys] = useState<Set<string>>(new Set());
+  const [selectedWaypointKeys, setSelectedWaypointKeys] = useState<Set<string>>(new Set());
+  const [selectedNodeIds, setSelectedNodeIds] = useState<Set<string>>(new Set());
+  const [selectionBox, setSelectionBox] = useState<{ x0: number; y0: number; x1: number; y1: number; ox: number; oy: number } | null>(null);
+  const selectionBoxRef = useRef<{ x0: number; y0: number; x1: number; y1: number; ox: number; oy: number } | null>(null);
+  const handleSelectionChange = useCallback(({ nodes: selectedNodes }: { nodes: Node[] }) => {
+    const nextIds = new Set(selectedNodes.map((n) => n.id));
+    setSelectedNodeIds((prev) => {
+      if (prev.size === nextIds.size) {
+        let same = true;
+        for (const id of prev) {
+          if (!nextIds.has(id)) {
+            same = false;
+            break;
+          }
+        }
+        if (same) return prev;
+      }
+      return nextIds;
+    });
+  }, []);
   const [nextGoals, setNextGoals] = useState<NextGoalItem[]>(initialNext);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1318,8 +1367,12 @@ function GoalGraphClientInner({
   const [isConnecting, setIsConnecting] = useState(false);
   const [boardMembers, setBoardMembers] = useState<BoardMemberItem[]>([]);
   const [publicShareToken, setPublicShareToken] = useState<string | null>(
-    boards.find((board) => board.id === currentBoardId)?.publicShareToken ?? null,
+    publicShareTokenFromPage ?? boards.find((board) => board.id === currentBoardId)?.publicShareToken ?? null,
   );
+  const [goalChangesOpen, setGoalChangesOpen] = useState(false);
+  const [goalChanges, setGoalChanges] = useState<
+    Array<{ id: string; changedField: string; oldValue: string | null; newValue: string | null; userEmail: string | null; createdAt: string }>
+  >([]);
   const [boardModalMode, setBoardModalMode] = useState<BoardModalMode | null>(null);
   const [boardModalTitle, setBoardModalTitle] = useState("");
   const [shareModalOpen, setShareModalOpen] = useState(false);
@@ -1368,6 +1421,7 @@ function GoalGraphClientInner({
   const [gridSnapEnabled, setGridSnapEnabled] = useState(userUiDefaults.graphGridSnapEnabled);
   /** Зажатый Ctrl временно отключает привязку к сетке при перетаскивании узлов и точек связи. */
   const [ctrlHeldForSnapBypass, setCtrlHeldForSnapBypass] = useState(false);
+  const [dragSnapBypass, setDragSnapBypass] = useState(false);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1714,11 +1768,88 @@ function GoalGraphClientInner({
     };
   }, [reactFlow]);
 
+  useEffect(() => {
+    if (!isEditor || isPublicView) return;
+    const host = flowSectionRef.current;
+    if (!host) return;
+
+    let startClient: { x: number; y: number } | null = null;
+    let active = false;
+
+    const onPointerDown = (event: PointerEvent) => {
+      if (!event.shiftKey || event.button !== 0) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest(".react-flow__node,.react-flow__edge,.react-flow__controls,.react-flow__minimap")) return;
+      startClient = { x: event.clientX, y: event.clientY };
+      active = true;
+      const r = host.getBoundingClientRect();
+      const next = { x0: event.clientX, y0: event.clientY, x1: event.clientX, y1: event.clientY, ox: r.left, oy: r.top };
+      selectionBoxRef.current = next;
+      setSelectionBox(next);
+    };
+    const onPointerMove = (event: PointerEvent) => {
+      if (!active || !startClient) return;
+      setSelectionBox((prev) => {
+        if (!prev) return prev;
+        const next = { ...prev, x1: event.clientX, y1: event.clientY };
+        selectionBoxRef.current = next;
+        return next;
+      });
+    };
+    const onPointerUp = () => {
+      const box = selectionBoxRef.current;
+      if (!active || !box) return;
+      active = false;
+      const startFlow = reactFlow.screenToFlowPosition({ x: box.x0, y: box.y0 });
+      const endFlow = reactFlow.screenToFlowPosition({ x: box.x1, y: box.y1 });
+      const minX = Math.min(startFlow.x, endFlow.x);
+      const maxX = Math.max(startFlow.x, endFlow.x);
+      const minY = Math.min(startFlow.y, endFlow.y);
+      const maxY = Math.max(startFlow.y, endFlow.y);
+      const hitNodes = new Set(
+        nodesRef.current
+          .filter((n) => {
+            const { width, height } = measuredGoalNodeSize(n);
+            const left = n.position.x;
+            const top = n.position.y;
+            const right = left + width;
+            const bottom = top + height;
+            return !(right < minX || left > maxX || bottom < minY || top > maxY);
+          })
+          .map((n) => n.id),
+      );
+      const hitWps = new Set<string>();
+      for (const e of edgesRef.current) {
+        const wps = normalizeEdgeWaypointsArray((e.data as { waypoints?: EdgeWaypoint[] } | undefined)?.waypoints);
+        wps.forEach((wp, i) => {
+          if (wp.x >= minX && wp.x <= maxX && wp.y >= minY && wp.y <= maxY) hitWps.add(`${e.id}:${i}`);
+        });
+      }
+      setSelectedNodeIds(hitNodes);
+      setSelectedWaypointKeys(hitWps);
+      selectionBoxRef.current = null;
+      setSelectionBox(null);
+    };
+
+    host.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+    return () => {
+      host.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+    };
+  }, [isEditor, isPublicView, reactFlow]);
+
   const loadGraph = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     try {
-      const response = await fetch(withBoard("/api/graph"));
+      const endpoint =
+        isPublicView && publicShareToken
+          ? `/api/public/${encodeURIComponent(publicShareToken)}/graph`
+          : withBoard("/api/graph");
+      const response = await fetch(endpoint);
       const data = await parseJson<GraphResponse>(response);
       const nextEdges = data.edges.map((edge) => toFlowEdge(edge, isEditor));
       const nextNodes = buildFlowNodes(data.goals, data.edges);
@@ -1730,7 +1861,7 @@ function GoalGraphClientInner({
     } finally {
       setIsLoading(false);
     }
-  }, [isEditor, resetGraphHistoryFromSnapshot, withBoard]);
+  }, [isEditor, isPublicView, publicShareToken, resetGraphHistoryFromSnapshot, withBoard]);
 
   const loadNext = useCallback(async () => {
     try {
@@ -2024,8 +2155,9 @@ function GoalGraphClientInner({
   }, [deleteGoalById, selectedGoalId]);
 
   const onNodesChange = useCallback((changes: NodeChange<Node<GoalNodeData>>[]) => {
-    setNodes((prev) => applyNodeChanges<Node<GoalNodeData>>(changes, prev));
-  }, []);
+    const filtered = isEditor ? changes : changes.filter((c) => c.type !== "position");
+    setNodes((prev) => applyNodeChanges<Node<GoalNodeData>>(filtered, prev));
+  }, [isEditor]);
 
   const onEdgesChange = useCallback((changes: EdgeChange<Edge>[]) => {
     setEdges((prev) => applyEdgeChanges<Edge>(changes, prev));
@@ -2209,23 +2341,43 @@ function GoalGraphClientInner({
   );
 
   const onNodeDragStart = useCallback(
-    (_event: ReactMouseEvent, node: Node<GoalNodeData>, dragged: Node<GoalNodeData>[]) => {
+    (event: ReactMouseEvent, node: Node<GoalNodeData>, dragged: Node<GoalNodeData>[]) => {
       if (!isEditor) return;
-      const group = dragged.length > 0 ? dragged : [node];
-      const ids = new Set(group.map((n) => n.id));
+      setDragSnapBypass(Boolean(event.ctrlKey));
+      const selectedNow = nodesRef.current.filter((n) => selectedNodeIds.has(n.id));
+      const group = selectedNow.length > 1 ? selectedNow : dragged.length > 0 ? dragged : [node];
+      const groupIds = new Set(group.map((n) => n.id));
       const anchorStart = { x: node.position.x, y: node.position.y };
-      const internalEdges: { id: string; waypoints: EdgeWaypoint[] }[] = [];
+      const internalEdges: { id: string; waypoints: EdgeWaypoint[]; movableIndexes: number[] }[] = [];
+      if (group.length === 0) return;
       for (const e of edgesRef.current) {
-        if (ids.has(e.source) && ids.has(e.target)) {
-          const wps = normalizeEdgeWaypointsArray(
-            (e.data as { waypoints?: EdgeWaypoint[] } | undefined)?.waypoints,
-          );
-          internalEdges.push({ id: e.id, waypoints: wps.map((w) => ({ x: w.x, y: w.y })) });
+        const wps = normalizeEdgeWaypointsArray(
+          (e.data as { waypoints?: EdgeWaypoint[] } | undefined)?.waypoints,
+        );
+        const movableIndexes = wps
+          .map((_, index) => index)
+          .filter((index) => selectedWaypointKeys.has(`${e.id}:${index}`));
+        const isInternalGroupEdge = groupIds.has(e.source) && groupIds.has(e.target);
+        const effectiveMovableIndexes =
+          movableIndexes.length > 0
+            ? movableIndexes
+            : isInternalGroupEdge
+              ? wps.map((_, index) => index)
+              : [];
+        if (effectiveMovableIndexes.length > 0) {
+          internalEdges.push({
+            id: e.id,
+            waypoints: wps.map((w) => ({ x: w.x, y: w.y })),
+            movableIndexes: effectiveMovableIndexes,
+          });
         }
       }
+      const keys = new Set<string>();
+      for (const ie of internalEdges) for (const idx of ie.movableIndexes) keys.add(`${ie.id}:${idx}`);
+      setHighlightedWaypointKeys(keys);
       nodeDragWaypointsRef.current = { anchorStart, internalEdges };
     },
-    [isEditor],
+    [isEditor, selectedNodeIds, selectedWaypointKeys],
   );
 
   const onNodeDrag = useCallback(
@@ -2238,7 +2390,10 @@ function GoalGraphClientInner({
         prev.map((edge) => {
           const hit = snap.internalEdges.find((ie) => ie.id === edge.id);
           if (!hit) return edge;
-          const newWps = hit.waypoints.map((wp) => ({ x: wp.x + dx, y: wp.y + dy }));
+          const movable = new Set(hit.movableIndexes);
+          const newWps = hit.waypoints.map((wp, index) =>
+            movable.has(index) ? { x: wp.x + dx, y: wp.y + dy } : { x: wp.x, y: wp.y },
+          );
           return { ...edge, data: { ...(edge.data ?? {}), waypoints: newWps } };
         }),
       );
@@ -2249,9 +2404,11 @@ function GoalGraphClientInner({
   const onNodeDragStop = useCallback(
     async (_event: ReactMouseEvent, node: Node<GoalNodeData>, draggedNodes: Node<GoalNodeData>[]) => {
       if (!isEditor) return;
+      setDragSnapBypass(false);
 
       const snap = nodeDragWaypointsRef.current;
       nodeDragWaypointsRef.current = null;
+      setHighlightedWaypointKeys(new Set());
 
       const targets = draggedNodes.length > 0 ? draggedNodes : [node];
 
@@ -2283,8 +2440,19 @@ function GoalGraphClientInner({
       isEditor,
       updateWaypoints: updateEdgeWaypoints,
       gridSnapEnabled: Boolean(isEditor && gridSnapEnabled),
+      highlightedWaypointKeys,
+      selectedWaypointKeys,
+      toggleWaypointSelection: (edgeId: string, index: number, additive: boolean) => {
+        const key = `${edgeId}:${index}`;
+        setSelectedWaypointKeys((prev) => {
+          const next = additive ? new Set(prev) : new Set<string>();
+          if (next.has(key)) next.delete(key);
+          else next.add(key);
+          return next;
+        });
+      },
     }),
-    [gridSnapEnabled, isEditor, updateEdgeWaypoints],
+    [gridSnapEnabled, highlightedWaypointKeys, isEditor, selectedWaypointKeys, updateEdgeWaypoints],
   );
 
   const selectedBlockedBy = useMemo(() => {
@@ -2313,6 +2481,16 @@ function GoalGraphClientInner({
   const selectedPriority = selectedGoalNode?.data.priority ?? 3;
   const selectedType = selectedGoalNode?.data.type ?? "TASK";
   const selectedStartsOn = selectedGoalNode?.data.startsOn ?? "";
+  const loadGoalChanges = useCallback(async (goalId: string) => {
+    if (isPublicView) return;
+    try {
+      const response = await fetch(withBoard(`/api/goals/history?id=${encodeURIComponent(goalId)}`));
+      const data = await parseJson<Array<{ id: string; changedField: string; oldValue: string | null; newValue: string | null; userEmail: string | null; createdAt: string }>>(response);
+      setGoalChanges(data);
+    } catch {
+      setGoalChanges([]);
+    }
+  }, [isPublicView, withBoard]);
 
   useEffect(() => {
     if (!selectedGoalNode) {
@@ -2327,25 +2505,6 @@ function GoalGraphClientInner({
     // Sync ref только при смене выбранной цели (id), не при каждом обновлении полей в nodes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedGoalNode?.id]);
-
-  useEffect(() => {
-    if (!selectedGoalId || !isEditor || !selectedGoalNode) return;
-    const synced = goalTextSyncedRef.current;
-    if (!synced || synced.id !== selectedGoalId) return;
-    if (selectedTitle === synced.title && selectedDescription === synced.description) return;
-
-    const timeoutId = window.setTimeout(() => {
-      const goalId = selectedGoalId;
-      const title = selectedTitle;
-      const description = selectedDescription;
-      void updateGoalRef.current(goalId, { title, description }, { recordHistory: false }).then(() => {
-        if (goalTextSyncedRef.current?.id !== goalId) return;
-        goalTextSyncedRef.current = { id: goalId, title, description };
-      });
-    }, 480);
-
-    return () => window.clearTimeout(timeoutId);
-  }, [selectedTitle, selectedDescription, selectedGoalId, isEditor, selectedGoalNode]);
 
   useEffect(() => {
     const goalIdWhenFocused = selectedGoalId;
@@ -2364,6 +2523,11 @@ function GoalGraphClientInner({
       );
     };
   }, [selectedGoalId, isEditor]);
+  useEffect(() => {
+    if (!selectedGoalNode) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void loadGoalChanges(selectedGoalNode.id);
+  }, [loadGoalChanges, selectedGoalNode]);
 
   const setNodeField = useCallback(
     (goalId: string, patch: Partial<GoalNodeData>) => {
@@ -2972,6 +3136,17 @@ function GoalGraphClientInner({
         </aside>
 
         <section ref={flowSectionRef} className="goal-graph-flow relative h-full min-w-0 flex-1">
+          {selectionBox ? (
+            <div
+              className="pointer-events-none absolute z-20 border border-[#D39A43] bg-[#D39A43]/15"
+              style={{
+                left: Math.min(selectionBox.x0, selectionBox.x1) - selectionBox.ox,
+                top: Math.min(selectionBox.y0, selectionBox.y1) - selectionBox.oy,
+                width: Math.abs(selectionBox.x1 - selectionBox.x0),
+                height: Math.abs(selectionBox.y1 - selectionBox.y0),
+              }}
+            />
+          ) : null}
           {error ? (
             <div className="absolute left-4 top-4 z-10 rounded-xl border border-[#A94F3D]/40 bg-[#2A1A18] px-3 py-2 text-sm text-[#F3B1A4]">
               {error}
@@ -3004,7 +3179,9 @@ function GoalGraphClientInner({
             onPaneClick={() => {
               selectGoalId(null);
               setFlowContextMenu(null);
+              setSelectedWaypointKeys((prev) => (prev.size === 0 ? prev : new Set()));
             }}
+            onSelectionChange={handleSelectionChange}
             defaultEdgeOptions={{
               type: "boundaryStraight",
               style: { stroke: EDGE_STROKE_MUTED, strokeWidth: EDGE_WIDTH },
@@ -3013,7 +3190,7 @@ function GoalGraphClientInner({
             }}
             nodesDraggable={isEditor}
             nodesConnectable={isEditor}
-            snapToGrid={isEditor && gridSnapEnabled && !ctrlHeldForSnapBypass}
+            snapToGrid={isEditor && gridSnapEnabled && !ctrlHeldForSnapBypass && !dragSnapBypass}
             snapGrid={[BACKGROUND_GRID_GAP, BACKGROUND_GRID_GAP]}
             minZoom={0.06}
             fitView
@@ -3178,11 +3355,23 @@ function GoalGraphClientInner({
                       onChange={(event) =>
                         setNodeField(selectedGoalNode.id, { title: event.target.value })
                       }
-                      onBlur={() => setEditingCardTitle(false)}
+                      onBlur={() => {
+                        setEditingCardTitle(false);
+                        void updateGoalRef.current(
+                          selectedGoalNode.id,
+                          { title: selectedTitle, description: selectedDescription },
+                          { recordHistory: false },
+                        );
+                      }}
                       onKeyDown={(event) => {
                         if (event.key === "Enter") {
                           event.preventDefault();
                           setEditingCardTitle(false);
+                          void updateGoalRef.current(
+                            selectedGoalNode.id,
+                            { title: selectedTitle, description: selectedDescription },
+                            { recordHistory: false },
+                          );
                         }
                       }}
                     />
@@ -3364,6 +3553,13 @@ function GoalGraphClientInner({
                   onChange={(event) =>
                     setNodeField(selectedGoalNode.id, { description: event.target.value })
                   }
+                  onBlur={() => {
+                    void updateGoalRef.current(
+                      selectedGoalNode.id,
+                      { title: selectedTitle, description: selectedDescription },
+                      { recordHistory: false },
+                    );
+                  }}
                 />
               </label>
 
@@ -3377,7 +3573,9 @@ function GoalGraphClientInner({
                   onChange={(event) => {
                     const next = event.target.value || null;
                     setNodeField(selectedGoalNode.id, { startsOn: next });
-                    void updateGoal(selectedGoalNode.id, { startsOn: next });
+                  }}
+                  onBlur={() => {
+                    void updateGoal(selectedGoalNode.id, { startsOn: selectedStartsOn || null });
                   }}
                 />
                 <p className="mt-1 text-[11px] text-[#6F6A62]">
@@ -3409,6 +3607,30 @@ function GoalGraphClientInner({
                   selectedUnlocks.map((title) => <p key={title}>• {title}</p>)
                 )}
               </div>
+
+              {goalChanges.length > 0 ? (
+                <div className="rounded-xl border border-white/10 bg-[#1D201E] p-3 text-sm text-[#B8B0A3]">
+                  <button
+                    type="button"
+                    className="mb-2 w-full cursor-pointer text-left text-xs uppercase tracking-[0.06em] text-[#8A857B]"
+                    onClick={() => setGoalChangesOpen((v) => !v)}
+                  >
+                    История изменений {goalChangesOpen ? "▾" : "▸"}
+                  </button>
+                  {goalChangesOpen ? (
+                    <div className="max-h-44 space-y-2 overflow-y-auto text-xs">
+                      {goalChanges.map((entry) => (
+                        <p key={entry.id}>
+                          {entry.userEmail === currentUserEmail ? "Вы" : entry.userEmail ?? "Пользователь"}:{" "}
+                          <span className="cursor-help" title={new Date(entry.createdAt).toLocaleString("ru-RU")}>изменен</span>{" "}
+                          <span>{entry.changedField}</span>: <span className="cursor-help" title={entry.oldValue ?? "—"}>&quot;
+                          {entry.newValue ?? "—"}&quot;</span>
+                        </p>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
           ) : (
             <div className="rounded-xl border border-white/10 bg-[#1D201E] p-4 text-sm text-[#B8B0A3]">
@@ -3718,6 +3940,7 @@ type GoalGraphClientProps = {
   currentUserEmail: string | null;
   isPublicView?: boolean;
   publicBoardTitle?: string;
+  publicShareTokenFromPage?: string | null;
   initialGraph: GraphResponse;
   initialNext: NextGoalItem[];
   initialUserUiSettings?: UserUiSettings | null;
@@ -3730,6 +3953,7 @@ export function GoalGraphClient({
   currentUserEmail,
   isPublicView,
   publicBoardTitle,
+  publicShareTokenFromPage,
   initialGraph,
   initialNext,
   initialUserUiSettings,
@@ -3743,6 +3967,7 @@ export function GoalGraphClient({
         currentUserEmail={currentUserEmail}
         isPublicView={isPublicView}
         publicBoardTitle={publicBoardTitle}
+        publicShareTokenFromPage={publicShareTokenFromPage}
         initialGraph={initialGraph}
         initialNext={initialNext}
         initialUserUiSettings={initialUserUiSettings}

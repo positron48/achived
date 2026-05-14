@@ -75,6 +75,7 @@ export default async function SharePage({ params }: SharePageProps) {
         currentUserEmail={null}
         isPublicView
         publicBoardTitle={board.title}
+        publicShareTokenFromPage={token}
         initialGraph={{ goals: apiGoals, edges }}
         initialNext={initialNext}
       />

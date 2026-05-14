@@ -27,7 +27,6 @@ export async function PATCH(request: Request, { params }: Context) {
     return NextResponse.json({ error: "Board not found or access denied" }, { status: 403 });
   }
 
-  const { id } = await params;
   const body = await request.json().catch(() => null);
   const parsed = updateGoalSchema.safeParse(body);
 
@@ -44,6 +43,11 @@ export async function PATCH(request: Request, { params }: Context) {
       { status: 400 },
     );
   }
+  const { id } = await params;
+  const before = await prisma.goal.findFirst({ where: { id, boardId } });
+  if (!before) {
+    return NextResponse.json({ error: "Goal not found" }, { status: 404 });
+  }
 
   const data: Record<string, unknown> = { ...parsed.data };
   if ("startsOn" in data) {
@@ -51,17 +55,39 @@ export async function PATCH(request: Request, { params }: Context) {
     data.startsOn = v === null || v === undefined ? null : new Date(String(v));
   }
 
-  const updatedCount = await prisma.goal.updateMany({
-    where: { id, boardId },
-    data,
-  });
+  const updatedCount = await prisma.goal.updateMany({ where: { id, boardId }, data });
   if (updatedCount.count === 0) {
     return NextResponse.json({ error: "Goal not found" }, { status: 404 });
   }
-
-  const updated = await prisma.goal.findFirst({
-    where: { id, boardId },
-  });
+  const updated = await prisma.goal.findFirst({ where: { id, boardId } });
+  if (!updated) {
+    return NextResponse.json({ error: "Goal not found" }, { status: 404 });
+  }
+  const changedFields: Array<{ field: string; oldValue: string | null; newValue: string | null }> = [];
+  const maybePush = (field: string, oldValue: unknown, newValue: unknown) => {
+    const oldStr = oldValue == null ? null : String(oldValue);
+    const newStr = newValue == null ? null : String(newValue);
+    if (oldStr !== newStr) changedFields.push({ field, oldValue: oldStr, newValue: newStr });
+  };
+  if ("title" in data) maybePush("title", before.title, updated.title);
+  if ("description" in data) maybePush("description", before.description, updated.description);
+  if ("status" in data) maybePush("status", before.status, updated.status);
+  if ("priority" in data) maybePush("priority", before.priority, updated.priority);
+  if ("type" in data) maybePush("type", before.type, updated.type);
+  if ("startsOn" in data) maybePush("startsOn", before.startsOn?.toISOString().slice(0, 10), updated.startsOn?.toISOString().slice(0, 10));
+  if (changedFields.length > 0) {
+    await (prisma as unknown as { goalChange?: { createMany: (args: unknown) => Promise<unknown> } }).goalChange?.createMany({
+      data: changedFields.map((entry) => ({
+        goalId: id,
+        boardId,
+        userId: user.id,
+        userEmail: user.email,
+        changedField: entry.field,
+        oldValue: entry.oldValue,
+        newValue: entry.newValue,
+      })),
+    });
+  }
   return NextResponse.json(updated);
 }
 

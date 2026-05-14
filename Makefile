@@ -14,7 +14,7 @@ up:
 	docker compose up -d db; \
 	npx prisma generate >/dev/null; \
 	(npx prisma migrate deploy >/dev/null 2>&1 || npx prisma db push --accept-data-loss >/dev/null); \
-	nohup npm run dev -- --hostname 0.0.0.0 --port $(APP_PORT) > "$(DEV_LOG_FILE)" 2>&1 & echo $$! > "$(DEV_PID_FILE)"; \
+	nohup npm run dev -- --hostname 0.0.0.0 --port $(APP_PORT) --webpack > "$(DEV_LOG_FILE)" 2>&1 & echo $$! > "$(DEV_PID_FILE)"; \
 	echo ""; \
 	echo "GoalGraph запущен."; \
 	echo "Открой приложение: http://localhost:$(APP_PORT)"; \

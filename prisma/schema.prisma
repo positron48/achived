@@ -22,10 +22,27 @@ model Goal {
   startsOn      DateTime?   @db.Date
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
+  changeLog     GoalChange[]
   outgoingEdges GoalEdge[]  @relation("SourceGoal")
   incomingEdges GoalEdge[]  @relation("TargetGoal")
 
   @@index([boardId])
+}
+
+model GoalChange {
+  id          String   @id @default(cuid())
+  goalId       String
+  goal         Goal     @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  boardId      String
+  userId       String
+  userEmail    String?
+  changedField String
+  oldValue     String?
+  newValue     String?
+  createdAt    DateTime @default(now())
+
+  @@index([goalId, createdAt])
+  @@index([boardId, createdAt])
 }
 
 model GoalEdge {
